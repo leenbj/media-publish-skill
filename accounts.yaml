@@ -17,6 +17,11 @@ accounts:
     account: 默认账号
     state: states/csdn-默认账号.json
     note: CSDN博客
+  - code: c-2
+    media: csdn
+    account: 第二账号
+    state: states/csdn-第二账号.json
+    note: CSDN博客(二)
 
 # 企业资料检索命令（为空则自动探测）：优先 $ANYSEARCH_CMD，其次 PATH 中的
 # anysearch_cli.py，最后回退历史路径。示例：
