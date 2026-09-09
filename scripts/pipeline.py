@@ -347,7 +347,7 @@ def main() -> int:
             pick = int(r["num"])
         except (TypeError, ValueError):
             pick = 0
-        title = common.build_title(company, domain, limit, pick, r.get("short", ""))
+        title = common.build_title(company, domain, limit, pick, r.get("short", ""), body)
         ok, issues = check_content(title, domain)
         if not ok:
             print(f"   ✗ 标题红线未过，跳过: {issues[:2]}")

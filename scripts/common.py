@@ -10,6 +10,7 @@ accounts.yaml 是唯一真实来源；环境变量可覆盖：
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 from pathlib import Path
@@ -109,10 +110,35 @@ ABBR_BOUNDARIES = ("集团", "控股", "实业", "公司", "中心")
 # 标题描述位：中性事实陈述，无广告色彩，按行号轮换保证同批多样性
 NEUTRAL_SUFFIXES = ("新入口", "官网直达", "中文直达", "品牌直达", "正式启用")
 
+# 正文核心短语锚点：动词+宾语片段（如 深耕水产食品行业多年/成立于2003年）
+CORE_VERBS = ("深耕", "专注于", "专注", "聚焦", "主营", "从事", "致力于",
+              "打造", "拥有", "始创于", "成立于", "位于", "覆盖", "畅销", "远销")
+
 
 def title_suffixes(pick: int = 0) -> list[str]:
     pool = list(NEUTRAL_SUFFIXES)
     return [pool[(pick + i) % len(pool)] for i in range(len(pool))]
+
+
+def extract_core(body: str, company: str, domain: str, budget: int) -> str:
+    """从正文提取核心短语作标题后缀：找动词锚点，取到标点为止的片段。
+    只接受自然装下（不硬截，保证不断章），含公司名/域名的跳过；没有返回空串。"""
+    if budget < 2 or not body:
+        return ""
+    stop = re.compile(r"[，。；：、？！…—\n\"“”]")
+    tail = re.compile(r"(多年|以来|至今|之一|第一|领先|行业|领域|产业|的|了)$")
+    for m in re.finditer("|".join(CORE_VERBS), body):
+        frag = stop.split(body[m.start():])[0].strip().strip("\"“”")
+        old = None
+        while old != frag:  # 迭代去尾缀修饰，留核心（如 …行业多年→…水产食品）
+            old, frag = frag, tail.sub("", frag)
+        if not frag or domain in frag or ".网址" in frag:
+            continue
+        if company and len(company) >= 4 and company[:4] in frag:
+            continue
+        if 2 <= len(frag) <= budget:
+            return frag
+    return ""
 
 
 def short_company(name: str) -> str:
@@ -134,17 +160,22 @@ def abbr_company(name: str) -> str:
 
 
 def build_title(company: str, domain: str, limit: int = DEFAULT_TITLE_LIMIT,
-                pick: int = 0, short_name: str = "") -> str:
+                pick: int = 0, short_name: str = "", content: str = "") -> str:
     """组装标题：名称 + 官网启用 + 域名 + 短描述，保证 len <= limit。
     名称优先级：xlsx 简称列 > 全称 > 去尾缀 > 地域品牌截断；
-    描述只是装饰，空间不够时先换短词、再直接省略，保名称+官网启用+域名完整。"""
+    描述位优先从正文提核心短语，提不出用中性池，空间不够直接省略，
+    保名称+官网启用+域名完整。"""
     suffixes = title_suffixes(pick)
     bases = list(dict.fromkeys(
         [b for b in (short_name.strip(), company,
                      short_company(company), abbr_company(company)) if b]))
     for base in bases:
         stem = f"{base}官网启用{domain}"
-        for sfx in suffixes:
+        cands = list(suffixes)
+        core = extract_core(content, company, domain, limit - len(stem) - 1)
+        if core:
+            cands.insert(0, core)
+        for sfx in cands:
             t = f"{stem}，{sfx}"
             if len(t) <= limit:
                 return t
