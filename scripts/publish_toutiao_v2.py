@@ -199,6 +199,9 @@ def main() -> int:
     paras = [p.strip() for p in text.split("\n") if p.strip()]
     keyword = a.keyword or "互联网"
     media, account, state_file = common.state_for_code(a.code)
+    warn = common.title_warning(a.title, media)
+    if warn:
+        print(f"⚠ {warn}")
 
     with sync_playwright() as p:
         # 反检测：禁用自动化标志（实测 navigator.webdriver=None）+ 默认有头

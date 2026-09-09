@@ -322,10 +322,24 @@ def main() -> int:
         import os as _os
         llm_hit = gen_news_llm(company, domain, note, a.llm_cmd or _os.environ.get("MEDIA_LLM_CMD", ""))
         if llm_hit:
-            title, body = llm_hit
+            _, body = llm_hit
             print("   (LLM 生成)")
         else:
-            title, body = gen_news_article(company, domain, note)
+            _, body = gen_news_article(company, domain, note)
+        # 标题：企业名称+官网启用+域名+短描述，按本行目标媒体的最严字数上限裁剪
+        limits = [common.TITLE_LIMIT.get(MEDIA_OF[c], common.DEFAULT_TITLE_LIMIT)
+                  for c in r["codes"] if c in MEDIA_OF]
+        limit = min(limits) if limits else common.DEFAULT_TITLE_LIMIT
+        try:
+            pick = int(r["num"])
+        except (TypeError, ValueError):
+            pick = 0
+        title = common.build_title(company, domain, limit, pick)
+        ok, issues = check_content(title, domain)
+        if not ok:
+            print(f"   ✗ 标题红线未过，跳过: {issues[:2]}")
+            continue
+        print(f"   标题({len(title)}字≤{limit}): {title}")
         ok, issues = check_content(title + body, domain)
         if not ok:
             print("   ⚠ 红线检查未过，自动修正：", issues[:3])

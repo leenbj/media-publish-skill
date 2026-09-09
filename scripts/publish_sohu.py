@@ -133,6 +133,9 @@ def main() -> int:
     text = Path(a.body_file).read_text(encoding="utf-8")
     paras = [p.strip() for p in text.split("\n") if p.strip()]
     media, account, state_file = common.state_for_code(a.code)
+    warn = common.title_warning(a.title, media)
+    if warn:
+        print(f"⚠ {warn}")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)

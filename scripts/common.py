@@ -94,6 +94,53 @@ def resolve_anysearch() -> list[str]:
         "找不到企业检索命令：设置 ANYSEARCH_CMD 环境变量，或把 anysearch_cli.py 放入 PATH")
 
 
+# 各平台标题字数上限（实测：头条输入框限 30 字、搜狐 placeholder 5-72 字、CSDN 5~100 字）
+TITLE_LIMIT = {"toutiao": 30, "sohu": 72, "csdn": 100}
+DEFAULT_TITLE_LIMIT = 30  # 多媒体同发时取各目标中最严的一个
+
+# 公司名缩写：超长时依次剥离这些尾缀（保留核心品牌名）
+COMPANY_TAILS = ("有限责任公司", "股份有限公司", "集团有限公司", "有限公司", "集团", "公司")
+
+# 标题短描述池（全部 ≤6 字、过红线安全），按行号轮换保证多样性
+TITLE_SUFFIXES = ("访问更便捷", "品牌入口升级", "直达官网", "安全又好记",
+                  "一键直达", "认准官方入口")
+
+
+def short_company(name: str) -> str:
+    for t in COMPANY_TAILS:
+        if name.endswith(t) and len(name) - len(t) >= 2:
+            return name[:len(name) - len(t)]
+    return name
+
+
+def build_title(company: str, domain: str, limit: int = DEFAULT_TITLE_LIMIT,
+                pick: int = 0) -> str:
+    """组装标题：企业名称 + 官网启用 + 域名 + 短描述，保证 len <= limit。
+    策略：全称+描述 → 缩写+描述 → 全称（无描述位时）→ 硬截（域名完整优先）。"""
+    suffixes = [TITLE_SUFFIXES[(pick + i) % len(TITLE_SUFFIXES)]
+                for i in range(len(TITLE_SUFFIXES))]
+    for base in (company, short_company(company)):
+        stem = f"{base}官网启用{domain}"
+        for sfx in suffixes:
+            t = f"{stem}，{sfx}"
+            if len(t) <= limit:
+                return t
+        if len(stem) <= limit:
+            return stem
+    # 极端超长：截公司名，保“官网启用+域名+描述”完整
+    core = f"官网启用{domain}，{suffixes[0]}"
+    keep = max(2, limit - len(core))
+    return company[:keep] + core
+
+
+def title_warning(title: str, media: str) -> str:
+    """标题超该平台上限时返回提示，否则返回空串。"""
+    limit = TITLE_LIMIT.get(media, DEFAULT_TITLE_LIMIT)
+    if len(title) > limit:
+        return f"标题 {len(title)} 字超{media}上限 {limit} 字，可能被平台截断/拒收"
+    return ""
+
+
 def pending_path() -> Path:
     return Path(os.environ.get("MEDIA_PENDING", str(BASE / "pending-links.json")))
 

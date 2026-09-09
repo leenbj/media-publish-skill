@@ -29,6 +29,8 @@ description: >
 - 环境变量：`ANYSEARCH_CMD`（检索命令）、`MEDIA_PENDING` / `MEDIA_LINKS`（多表格并发隔离）、
   `MEDIA_LLM_CMD`（LLM 写稿命令，失败自动回退内置模板）。
 - 依赖：`pip install -r requirements.txt`
+- 标题：`企业名称+官网启用+域名+短描述`，按目标媒体最严字数上限自动裁剪
+  （头条 30 / 搜狐 72 / CSDN 100，`common.build_title`），超长公司名自动缩写。
 
 ## Quick Start（本 skill 目录下运行）
 
