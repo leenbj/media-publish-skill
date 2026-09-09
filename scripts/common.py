@@ -10,6 +10,7 @@ accounts.yaml 是唯一真实来源；环境变量可覆盖：
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 from pathlib import Path
@@ -109,14 +110,41 @@ ABBR_BOUNDARIES = ("集团", "控股", "实业", "公司", "中心")
 # 标题描述位：中性事实陈述，无广告色彩，按行号轮换保证同批多样性
 NEUTRAL_SUFFIXES = ("新入口", "官网直达", "中文直达", "品牌直达", "正式启用")
 
-# 标题描述位：描述性语言（非广告语），按正文命中的主题选择
-THEME_MAP = (
-    (("假冒", "仿冒", "防伪", "钓鱼", "品牌保护", "维权", "品牌资产"), "品牌保护"),
-    (("数字化", "转型", "生态", "前瞻"), "数字化升级"),
-    (("直达", "好记", "所见即所得", "输入"), "中文直达"),
-    (("安全", "信任", "可信", "防线"), "安全升级"),
-    (("体验", "服务", "便捷", "门槛"), "体验升级"),
-)
+# 高频虚词（组关键词时剔除，保证关键词是实词）
+FUNC_CHARS = set("的了是在有和与或对将以也更最很第个们之及等为由比跟把被让给用可进行成为作为通过以及及其并且或者是否")
+
+
+def _top_keywords(body: str, company: str, domain: str, topn: int = 10) -> list[str]:
+    """正文高频实词：汉字 2-4 字滑窗统计，出现≥2 次、剔虚词/公司名/域名，得分=频次优先、长度次之。"""
+    text = re.sub(r"[^\u4e00-\u9fa5]", "", body)
+    nodot = re.sub(r"[^\u4e00-\u9fa5]", "", domain)  # 海宝源.网址→海宝源网址，防域名碎片混入
+    freq: dict[str, int] = {}
+    for i in range(len(text)):
+        for L in (2, 3, 4):
+            g = text[i:i + L]
+            if len(g) < L or any(ch in FUNC_CHARS for ch in g):
+                continue
+            if g in company or g in domain or g in nodot:
+                continue
+            if "网址" in g or "域名" in g:
+                continue
+            freq[g] = freq.get(g, 0) + 1
+    # 去切词碎片：某词是另一同频长词的子串（如 文域名⊂中文域名）则丢掉
+    keys = [g for g, f in freq.items() if f >= 2]
+    drop = {g for g in keys
+            if any(h != g and len(h) > len(g) and g in h and freq[h] >= freq[g] - 1
+                   for h in keys)}
+    for g in drop:
+        del freq[g]
+    cands = sorted(((f, len(g), g) for g, f in freq.items() if f >= 2), reverse=True)
+    kept: list[str] = []
+    for _, _, g in cands:  # 去冗余：已被收录词包含的短词跳过（如已有品牌名称则不要品牌）
+        if any(k in g for k in kept):
+            continue
+        kept.append(g)
+        if len(kept) >= topn:
+            break
+    return kept
 
 
 def title_suffixes(pick: int = 0) -> list[str]:
@@ -125,15 +153,33 @@ def title_suffixes(pick: int = 0) -> list[str]:
 
 
 def extract_core(body: str, company: str, domain: str, budget: int, pick: int = 0) -> str:
-    """从正文主题选描述词作标题后缀：命中多个主题按行号轮换；
-    提不出/装不下返回空串，调用方回退中性池。"""
-    if budget < 2 or not body:
+    """从正文提核心短句作标题后缀：高频实词加权，短句按命中关键词打分取最优。
+    同篇多行在前 3 名里轮换；无可用短句返回空串，调用方回退中性池。"""
+    if budget < 4 or not body:
         return ""
-    matched = [phrase for kws, phrase in THEME_MAP
-               if len(phrase) <= budget and any(k in body for k in kws)]
-    if not matched:
+    kws = _top_keywords(body, company, domain)
+    if not kws:
         return ""
-    return matched[pick % len(matched)]
+    weight = {k: len(kws) - i for i, k in enumerate(kws)}
+    scored: list[tuple[int, str]] = []
+    for sent in re.split(r"[，。；：、？！…—\n\"“”'']", body):
+        sent = sent.strip()
+        if not (4 <= len(sent) <= budget):
+            continue
+        if domain in sent or ".网址" in sent:
+            continue
+        if company and len(company) >= 4 and company[:4] in sent:
+            continue
+        if re.search(r"[a-zA-Z]{2,}|\.com|\.cn", sent):
+            continue
+        s = sum(w for k, w in weight.items() if k in sent)
+        if s > 0:
+            scored.append((s, sent))
+    if not scored:
+        return ""
+    scored.sort(key=lambda x: (-x[0], len(x[1])))
+    top = [s for _, s in scored[:3]]
+    return top[pick % len(top)]
 
 
 def short_company(name: str) -> str:
