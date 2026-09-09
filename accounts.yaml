@@ -1,0 +1,18 @@
+# 媒体账号映射表：任务文档里只写编码，这里解析到媒体+账号+登录态文件。
+# states/ 下文件名规则：<media>-<account>.json
+accounts:
+  - code: a-1
+    media: sohu
+    account: 默认账号
+    state: states/sohu-默认账号.json
+    note: 搜狐号
+  - code: b-1
+    media: toutiao
+    account: 域名科技
+    state: states/toutiao-域名科技.json
+    note: 头条号
+  - code: c-1
+    media: csdn
+    account: 默认账号
+    state: states/csdn-默认账号.json
+    note: CSDN博客
