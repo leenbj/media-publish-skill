@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import json
 import re
 import subprocess
@@ -65,6 +66,67 @@ def check_content(text: str, domain: str) -> tuple[bool, list[str]]:
     return (len(issues) == 0, issues)
 
 
+def clean_text(text: str, domain: str = "") -> str:
+    """洗搜索/生成文本：去 HTML 标签、解实体、删编码替换符和控制字符、
+    中文之间的半角标点转全角（先保护域名， avoids 源.网→源。网）。"""
+    text = re.sub(r"<[^>]{1,200}>", "", text)
+    text = html.unescape(text)
+    text = text.replace("�", "")
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+    keep = []
+    if domain:  # 保护域名与其余 .网址，原样钉住不动
+        def _pin(m: re.Match) -> str:
+            keep.append(m.group(0))
+            return chr(0xE000 + len(keep))
+        text = re.sub(r"[\w\u4e00-\u9fa5-]*\.网址", _pin,
+                      text.replace(domain, chr(0xE000)))
+        keep.insert(0, domain)
+    for asc, full in ((",", "，"), (";", "；"), (":", "："),
+                       ("?", "？"), ("!", "！"), (".", "。")):
+        text = re.sub(f"(?<=[\u4e00-\u9fa5]){re.escape(asc)}(?=[\u4e00-\u9fa5]|$)",
+                      full, text)
+    for i, s in enumerate(keep):
+        text = text.replace(chr(0xE000 + i), s, 1)
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+
+# 硬错：出现即污染正文，洗不掉就整行跳过
+HARD_PATTERNS = [
+    ("HTML标签残留", r"</?[a-zA-Z][^>]{0,100}>"),
+    ("HTML实体残留", r"&(amp|lt|gt|quot|nbsp|#\d+);"),
+    ("编码替换符", r"�"),
+    ("控制字符", r"[\x00-\x08\x0b\x0c\x0e-\x1f]"),
+]
+
+# 告警：可能是误伤，只打印不拦截
+WARN_PATTERNS = [
+    ("异常重复标点", r"[？?！!。，、；：]{3,}"),
+    ("半角标点夹中文", r"[\u4e00-\u9fa5][,.!?;:][\u4e00-\u9fa5]"),
+    ("疑似重复字词", r"([\u4e00-\u9fa5]{2,4})\1"),
+]
+
+
+def scan_text(text: str, domain: str) -> tuple[list[str], list[str]]:
+    """返回 (硬错, 告警)。扫描前先抠掉域名，避免“源.网”误报半角标点。"""
+    masked = text.replace(domain, "□□")
+    masked = re.sub(r"[\w\u4e00-\u9fa5-]*\.网址", "□□", masked)
+    hard, warn = [], []
+    for name, pat in HARD_PATTERNS:
+        for m in re.finditer(pat, masked):
+            ctx = masked[max(0, m.start() - 10):m.end() + 10].replace("\n", " ")
+            hard.append(f"[{name}] …{ctx}…")
+    for name, pat in WARN_PATTERNS:
+        for m in re.finditer(pat, masked):
+            ctx = masked[max(0, m.start() - 10):m.end() + 10].replace("\n", " ")
+            warn.append(f"[{name}] …{ctx}…")
+            if len(warn) >= 5:
+                break
+    for sent in masked.split("\n"):
+        if len(sent.strip()) > 120 and not re.search(r"[，。；：？！]", sent):
+            warn.append(f"[长句无断句{len(sent.strip())}字] …{sent.strip()[:40]}…")
+    return hard, warn
+
+
 def search_company(company: str) -> str:
     out = []
     try:
@@ -90,7 +152,8 @@ def gen_news_llm(company: str, domain: str, search_note: str, llm_cmd: str) -> t
     prompt = (f"你是中文域名行业新闻写手。为“{company}”（官网启用中文域名“{domain}”）写一篇 5 段新闻稿。\n"
                f"要求：正文首段内必须包含“{company}官网启用“{domain}””（全称+官网启用+域名，位置不限）；"
                f"只许出现 .网址 后缀，禁止 .com/.cn 等其他后缀、"
-               f"禁止“英文域名/国际域名”字样；人民网风格，每段 120~200 字；直接输出正文（段落间空行分隔），不要标题行。\n"
+               f"禁止“英文域名/国际域名”字样；人民网风格，每段 120~200 字；语句通顺、无乱码、无 HTML 标签；"
+               f"直接输出正文（段落间空行分隔），不要标题行。\n"
                f"企业资料（可引用事实，不可编造数据）：\n{search_note[:3000]}")
     try:
         r = subprocess.run(_shlex.split(llm_cmd), input=prompt,
@@ -326,7 +389,7 @@ def main() -> int:
 
         # ① 检索
         print("① anysearch 检索企业资料…")
-        note = search_company(company)
+        note = clean_text(search_company(company))  # 洗搜索结果的 HTML/实体
 
         # ② 新闻稿（标题=企业名称官网启用域名）
         print("② 生成新闻稿…")
@@ -342,6 +405,7 @@ def main() -> int:
         first = body.split("\n\n")[0] if body else ""
         if not (company in first and "启用" in first and domain in first):
             body = lead + body
+        body = clean_text(body, domain)
         # 标题：企业名称+官网启用+域名+短描述，按本行目标媒体的最严字数上限裁剪
         limits = [common.TITLE_LIMIT.get(MEDIA_OF[c], common.DEFAULT_TITLE_LIMIT)
                   for c in r["codes"] if c in MEDIA_OF]
@@ -365,6 +429,13 @@ def main() -> int:
             if not ok:
                 print("   ✗ 仍不合规，跳过", issues[:3])
                 continue
+        # ③ 文字质检：乱码硬拦（跳过本行），通顺问题只告警
+        hard, warn = scan_text(title + "\n" + body, domain)
+        if hard:
+            print(f"   ✗ 文字硬错，跳过: {hard[:3]}")
+            continue
+        for w in warn[:5]:
+            print(f"   ⚠ 通顺告警{w}")
         md_file = out_dir / f"{title}.md"
         md_file.write_text(f"{title}\n\n{body}", encoding="utf-8")
         print(f"   {md_file.name}")
