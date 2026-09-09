@@ -16,6 +16,8 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 BASE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import common
 STATES = BASE / "states"
 STATES.mkdir(exist_ok=True)
 
@@ -39,7 +41,7 @@ MEDIA = {
 
 
 def state_path(media: str, account: str) -> Path:
-    return STATES / f"{media}-{account}.json"
+    return common.state_for(media, account)
 
 
 def do_login(media: str, account: str) -> int:

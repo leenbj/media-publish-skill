@@ -33,6 +33,8 @@
 ## 快速开始
 
 ```bash
+pip install -r requirements.txt
+
 # 1. 首次：检查/录入各账号登录态（弹真实浏览器扫码）
 python3 scripts/setup_accounts.py
 
@@ -43,6 +45,14 @@ python3 scripts/pipeline.py --xlsx /path/to/表格.xlsx
 # 3. 审核通过后回查正式链接（覆盖表格占位）
 python3 scripts/collect_links.py
 ```
+
+## 配置（accounts.yaml 是唯一真实来源）
+
+- 加账号/换账号：只改 `accounts` 列表（`code/media/account/state/note`），各脚本自动生效。
+- 平台参数：`media_params`（搜狐 account_id、头条 user_id、CSDN 用户名），回查链接用。
+- 检索命令：`anysearch_cmd`，为空则按 `$ANYSEARCH_CMD` → PATH 中的 `anysearch_cli.py` → 本机历史路径自动探测。
+- 待回查/结果路径：`$MEDIA_PENDING` / `$MEDIA_LINKS`（默认 skill 根目录），多表格并发时分别指定即可隔离。
+- LLM 写稿：`export MEDIA_LLM_CMD="..."`（stdin 吃 prompt、stdout 吐正文）或 `--llm-cmd`；失败或红线未过自动回退内置模板。
 
 ## 核心原则
 

@@ -18,8 +18,9 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 BASE = Path(__file__).resolve().parent.parent
-STATES = BASE / "states"
-PENDING = BASE / "pending-links.json"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import common
+PENDING = common.pending_path()
 SHOTS = Path("/tmp/media-publish-dryrun")
 SHOTS.mkdir(parents=True, exist_ok=True)
 
@@ -131,10 +132,11 @@ def main() -> int:
 
     text = Path(a.body_file).read_text(encoding="utf-8")
     paras = [p.strip() for p in text.split("\n") if p.strip()]
+    media, account, state_file = common.state_for_code(a.code)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(storage_state=str(STATES / "sohu-默认账号.json"))
+        ctx = browser.new_context(storage_state=str(state_file))
         pg = ctx.new_page()
         try:
             open_editor(pg)
@@ -150,7 +152,7 @@ def main() -> int:
 
     pending = json.loads(PENDING.read_text()) if PENDING.exists() else []
     pending.append({
-        "code": a.code, "media": "sohu", "account": "默认账号",
+        "code": a.code, "media": media, "account": account,
         "title": a.title, "published_at": datetime.now().isoformat(timespec="seconds"),
         "status": "审核中",
     })

@@ -1,5 +1,6 @@
 # 媒体账号映射表：任务文档里只写编码，这里解析到媒体+账号+登录态文件。
 # states/ 下文件名规则：<media>-<account>.json
+# 本文件是唯一真实来源（scripts/common.py 读取），加账号/换参数只改这里。
 accounts:
   - code: a-1
     media: sohu
@@ -16,3 +17,17 @@ accounts:
     account: 默认账号
     state: states/csdn-默认账号.json
     note: CSDN博客
+
+# 企业资料检索命令（为空则自动探测）：优先 $ANYSEARCH_CMD，其次 PATH 中的
+# anysearch_cli.py，最后回退历史路径。示例：
+# anysearch_cmd: "/path/to/venv/bin/python3 /path/to/anysearch_cli.py"
+anysearch_cmd: ""
+
+# 各平台回查用参数（原来散落在脚本硬编码里）
+media_params:
+  sohu:
+    account_id: "121426417"   # 正式链接 https://www.sohu.com/a/<id>_<accountId> 尾段
+  toutiao:
+    user_id: "96499187252"   # 前台主页 https://www.toutiao.com/c/user/<id>/ 回查用
+  csdn:
+    user: yumingpingce        # 正式链接 https://blog.csdn.net/<user>/article/details/<id>

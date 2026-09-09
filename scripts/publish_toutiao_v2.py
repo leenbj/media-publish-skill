@@ -20,8 +20,9 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 BASE = Path(__file__).resolve().parent.parent
-STATES = BASE / "states"
-PENDING = BASE / "pending-links.json"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import common
+PENDING = common.pending_path()
 SHOTS = Path("/tmp/media-publish-dryrun")
 SHOTS.mkdir(parents=True, exist_ok=True)
 
@@ -197,6 +198,7 @@ def main() -> int:
     text = Path(a.body_file).read_text(encoding="utf-8")
     paras = [p.strip() for p in text.split("\n") if p.strip()]
     keyword = a.keyword or "互联网"
+    media, account, state_file = common.state_for_code(a.code)
 
     with sync_playwright() as p:
         # 反检测：禁用自动化标志（实测 navigator.webdriver=None）+ 默认有头
@@ -205,7 +207,7 @@ def main() -> int:
             args=["--disable-blink-features=AutomationControlled", "--no-first-run",
                   "--no-default-browser-check"],
         )
-        ctx = browser.new_context(storage_state=str(STATES / "toutiao-域名科技.json"))
+        ctx = browser.new_context(storage_state=str(state_file))
         ctx.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         pg = ctx.new_page()
@@ -227,7 +229,7 @@ def main() -> int:
     if a.go:
         pending = json.loads(PENDING.read_text()) if PENDING.exists() else []
         pending.append({
-            "code": a.code, "media": "toutiao", "account": "域名科技",
+            "code": a.code, "media": media, "account": account,
             "title": a.title, "published_at": datetime.now().isoformat(timespec="seconds"),
             "status": "审核中",
         })

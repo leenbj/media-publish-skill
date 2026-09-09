@@ -18,12 +18,8 @@ import requests
 from playwright.sync_api import sync_playwright
 
 BASE = Path(__file__).resolve().parent.parent
-STATES = BASE / "states"
-PENDING = BASE / "pending-links.json"
-LINKS_CSV = BASE / "links.csv"
-
-BLOG_USER_CSDN = "yumingpingce"
-SOHU_ACCOUNT_ID = "121426417"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import common
 
 
 def log(msg: str) -> None:
@@ -59,7 +55,8 @@ def check_toutiao(pg, item: dict) -> dict:
         return {"status": r["status"], "link": link}
     # 后台列表没找到 → 查前台主页是否真实在线（含搜索关键词前8字）
     key = item["title"][:8]
-    pg.goto("https://www.toutiao.com/c/user/96499187252/#log")
+    user_id = common.media_param("toutiao", "user_id")
+    pg.goto(f"https://www.toutiao.com/c/user/{user_id}/#log")
     pg.wait_for_timeout(6000)
     online = pg.evaluate("""((key) => {
       const a = [...document.querySelectorAll('a')].find(x => (x.textContent || '').includes(key))
@@ -124,10 +121,11 @@ def check_csdn(pg, item: dict) -> dict:
         })""", item["title"])
     if not art_id:
         return {"status": "未找到", "link": ""}
-    link = f"https://blog.csdn.net/{BLOG_USER_CSDN}/article/details/{art_id}"
+    user = common.media_param("csdn", "user")
+    link = f"https://blog.csdn.net/{user}/article/details/{art_id}"
     try:
         resp = requests.get(link, timeout=15, allow_redirects=True,
-                            headers={"User-Agent": "Mozilla/5.0"}, verify=False)
+                            headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200 and ("blog" in resp.url or "文章" in resp.text):
             return {"status": "已发布（在线）", "link": link}
         return {"status": f"链接待生效(HTTP {resp.status_code})", "link": ""}
@@ -141,9 +139,16 @@ CHECKERS = {"toutiao": check_toutiao, "sohu": check_sohu, "csdn": check_csdn}
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--code", help="只查指定编码")
+    ap.add_argument("--pending", default="", help="待回查文件（默认 $MEDIA_PENDING）")
+    ap.add_argument("--links", default="", help="结果 CSV（默认 $MEDIA_LINKS）")
     a = ap.parse_args()
 
-    pending = json.loads(PENDING.read_text())
+    PENDING = Path(a.pending) if a.pending else common.pending_path()
+    LINKS_CSV = Path(a.links) if a.links else common.links_path()
+    if not PENDING.exists():
+        print("没有待回查条目")
+        return 0
+    pending = json.loads(PENDING.read_text(encoding="utf-8"))
     targets = [x for x in pending if (not a.code or x["code"] == a.code)]
     if not targets:
         print("没有待回查条目")
@@ -167,7 +172,7 @@ def main() -> int:
         for media, items in media_groups.items():
             # 每个媒体用对应账号登录态（同媒体多账号时逐条切换）
             for item in items:
-                state_file = STATES / f"{media}-{item['account']}.json"
+                state_file = common.state_for(media, item["account"])
                 if not state_file.exists():
                     log(f"[{item['code']}] 缺登录态文件 {state_file.name}，跳过")
                     still_pending.append(item)

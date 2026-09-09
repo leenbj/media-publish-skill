@@ -17,6 +17,8 @@
 xlsx 回写：每个媒体编码（a-1/b-1/c-1）各占一列，发布后写正式链接，
 审核中写"(审核中)"占位，回查脚本下次覆盖。
 """
+from __future__ import annotations
+
 import argparse
 import csv
 import json
@@ -28,13 +30,15 @@ from pathlib import Path
 
 import openpyxl
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import common
+
 BASE = Path(__file__).resolve().parent.parent
 OUTPUT_ROOT = None  # 运行时 = xlsx 所在文件夹
-PENDING = BASE / "pending-links.json"
-LINKS_CSV = BASE / "links.csv"
-ANYSEARCH = "/Users/ethan/.hermes/hermes-agent/venv/bin/python3 /Users/ethan/.hermes/skills/anysearch/scripts/anysearch_cli.py"
+PENDING = common.pending_path()
+LINKS_CSV = common.links_path()
 
-MEDIA_OF = {"a-1": "sohu", "b-1": "toutiao", "c-1": "csdn"}
+MEDIA_OF = {code: e["media"] for code, e in common.codes().items()}
 MEDIA_PUBLISH = {
     "sohu": BASE / "scripts" / "publish_sohu.py",
     "toutiao": BASE / "scripts" / "publish_toutiao_v2.py",
@@ -63,14 +67,45 @@ def check_content(text: str, domain: str) -> tuple[bool, list[str]]:
 
 def search_company(company: str) -> str:
     out = []
+    try:
+        anysearch = common.resolve_anysearch()
+    except FileNotFoundError as e:
+        return f"(检索命令不可用: {e})"
     for q in [f"{company} 介绍", f"{company} 主营业务"]:
         try:
-            r = subprocess.run(ANYSEARCH.split() + ["search", q, "--max_results", "4"],
+            r = subprocess.run(anysearch + ["search", q, "--max_results", "4"],
                                capture_output=True, text=True, timeout=60)
             out.append(r.stdout)
         except Exception as e:
             out.append(f"(搜索失败: {e})")
     return "\n\n".join(out)
+
+
+def gen_news_llm(company: str, domain: str, search_note: str, llm_cmd: str) -> tuple[str, str] | None:
+    """用外部 LLM 命令生成新闻稿（$MEDIA_LLM_CMD 或 --llm-cmd，stdin 吃 prompt、stdout 吐正文）。
+    失败/不合规返回 None，调用方回退内置模板。"""
+    import shlex as _shlex
+    if not llm_cmd:
+        return None
+    prompt = (f"你是中文域名行业新闻写手。为“{company}”（官网启用中文域名“{domain}”）写一篇 5 段新闻稿。\n"
+               f"要求：标题必须是“{company}官网启用{domain}”；只许出现 .网址 后缀，禁止 .com/.cn 等其他后缀、"
+               f"禁止“英文域名/国际域名”字样；人民网风格，每段 120~200 字；直接输出正文（段落间空行分隔），不要标题行。\n"
+               f"企业资料（可引用事实，不可编造数据）：\n{search_note[:3000]}")
+    try:
+        r = subprocess.run(_shlex.split(llm_cmd), input=prompt,
+                           capture_output=True, text=True, timeout=300)
+        body = r.stdout.strip()
+        if r.returncode != 0 or not body:
+            print(f"   (LLM 无输出，回退模板: {r.stderr[-200:]})")
+            return None
+        ok, issues = check_content(company + domain + body, domain)
+        if not ok:
+            print(f"   (LLM 稿红线未过，回退模板: {issues[:2]})")
+            return None
+        return f"{company}官网启用{domain}", body
+    except Exception as e:
+        print(f"   (LLM 失败，回退模板: {e})")
+        return None
 
 
 def gen_news_article(company: str, domain: str, search_note: str) -> tuple[str, str]:
@@ -261,6 +296,7 @@ def main() -> int:
     ap.add_argument("--row", type=int, help="只处理指定编号")
     ap.add_argument("--dryrun", action="store_true")
     ap.add_argument("--no-publish", action="store_true")
+    ap.add_argument("--llm-cmd", default="", help="新闻稿 LLM 命令（默认 $MEDIA_LLM_CMD，为空用内置模板）")
     a = ap.parse_args()
 
     xlsx = Path(a.xlsx)
@@ -283,7 +319,13 @@ def main() -> int:
 
         # ② 新闻稿（标题=企业名称官网启用域名）
         print("② 生成新闻稿…")
-        title, body = gen_news_article(company, domain, note)
+        import os as _os
+        llm_hit = gen_news_llm(company, domain, note, a.llm_cmd or _os.environ.get("MEDIA_LLM_CMD", ""))
+        if llm_hit:
+            title, body = llm_hit
+            print("   (LLM 生成)")
+        else:
+            title, body = gen_news_article(company, domain, note)
         ok, issues = check_content(title + body, domain)
         if not ok:
             print("   ⚠ 红线检查未过，自动修正：", issues[:3])
@@ -329,7 +371,8 @@ def main() -> int:
             # ⑤ 回查正式链接（单次尝试），拿不到写占位
             link = ""
             if not a.dryrun:
-                subprocess.run([sys.executable, str(BASE / "scripts" / "collect_links.py"), "--code", code],
+                subprocess.run([sys.executable, str(BASE / "scripts" / "collect_links.py"), "--code", code,
+                                "--pending", str(PENDING), "--links", str(LINKS_CSV)],
                                capture_output=True, text=True, timeout=600, cwd=str(BASE))
                 if LINKS_CSV.exists():
                     for row in csv.DictReader(open(LINKS_CSV, encoding="utf-8-sig")):

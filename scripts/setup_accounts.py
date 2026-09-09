@@ -11,13 +11,11 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 BASE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import common
 STATES = BASE / "states"
 
-ACCOUNTS = [
-    {"media": "sohu", "account": "默认账号", "label": "搜狐号"},
-    {"media": "toutiao", "account": "域名科技", "label": "头条号"},
-    {"media": "csdn", "account": "默认账号", "label": "CSDN博客"},
-]
+ACCOUNTS = common.default_accounts()
 
 CHECK_URL = {
     "sohu": "https://mp.sohu.com/mpfe/v4/index",
@@ -77,7 +75,7 @@ def main() -> int:
     for acc in ACCOUNTS:
         if only and acc["media"] != only:
             continue
-        path = STATES / f"{acc['media']}-{acc['account']}.json"
+        path = common.state_for(acc["media"], acc["account"])
         if not path.exists():
             print(f"[{acc['label']}] ✗ 无登录态文件")
             missing.append(acc)
