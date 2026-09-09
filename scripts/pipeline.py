@@ -269,9 +269,11 @@ def read_rows(xlsx_path: Path) -> list[dict]:
     ws = wb.worksheets[0]
     headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
     # 媒体编码列：表头是"媒体"的列（可能有多列，每列一个编码），或表头直接是编码（a-1/b-1/c-1）
-    media_cols = [h for h in headers if h in MEDIA_OF or (h and str(h).strip() == "媒体")]
+    # 注意：同名“媒体”列有多列，必须按列下标读（headers.index 只返回第一列）
+    media_idx = [i for i, h in enumerate(headers)
+                 if h in MEDIA_OF or (h and str(h).strip() == "媒体")]
     # 可选“简称”列：标题用简称（如 中国长江三峡集团），正文仍用全称
-    short_col = next((headers.index(h) + 1 for h in headers
+    short_col = next((i + 1 for i, h in enumerate(headers)
                       if h and "简称" in str(h)), None)
     rows = []
     for r in range(2, ws.max_row + 1):
@@ -279,8 +281,8 @@ def read_rows(xlsx_path: Path) -> list[dict]:
         if num is None:
             continue
         codes = []
-        for h in media_cols:
-            v = ws.cell(row=r, column=headers.index(h) + 1).value
+        for i in media_idx:
+            v = ws.cell(row=r, column=i + 1).value
             if v:
                 # 一格可能含多个编码（顿号/逗号/分号分隔）
                 for c in re.split(r"[、，,;；\s]+", str(v).strip()):

@@ -110,8 +110,17 @@ ABBR_BOUNDARIES = ("集团", "控股", "实业", "公司", "中心")
 # 标题描述位：中性事实陈述，无广告色彩，按行号轮换保证同批多样性
 NEUTRAL_SUFFIXES = ("新入口", "官网直达", "中文直达", "品牌直达", "正式启用")
 
+# 后缀最大长度：再长就不叫后缀了，直接截掉超长候选
+SUFFIX_MAX_LEN = 8
+
+
 # 高频虚词（组关键词时剔除，保证关键词是实词）
 FUNC_CHARS = set("的了是在有和与或对将以也更最很第个们之及等为由比跟把被让给用可进行成为作为通过以及及其并且或者是否")
+
+# 连接词：单独成后缀等于没说，短句和关键词两边都不要
+CONNECTIVES = {"一方面", "另一方面", "同时", "此外", "然而", "但是", "因此",
+               "所以", "另外", "首先", "其次", "最后", "总之", "综上",
+               "比如", "例如", "目前", "当前", "方面"}
 
 
 def _top_keywords(body: str, company: str, domain: str, topn: int = 10) -> list[str]:
@@ -126,7 +135,7 @@ def _top_keywords(body: str, company: str, domain: str, topn: int = 10) -> list[
                 continue
             if g in company or g in domain or g in nodot:
                 continue
-            if "网址" in g or "域名" in g:
+            if "网址" in g or "域名" in g or g in CONNECTIVES:
                 continue
             freq[g] = freq.get(g, 0) + 1
     # 去切词碎片：某词是另一同频长词的子串（如 文域名⊂中文域名）则丢掉
@@ -155,6 +164,7 @@ def title_suffixes(pick: int = 0) -> list[str]:
 def extract_core(body: str, company: str, domain: str, budget: int, pick: int = 0) -> str:
     """从正文提核心短句作标题后缀：高频实词加权，短句按命中关键词打分取最优。
     同篇多行在前 3 名里轮换；无可用短句返回空串，调用方回退中性池。"""
+    budget = min(budget, SUFFIX_MAX_LEN)
     if budget < 4 or not body:
         return ""
     kws = _top_keywords(body, company, domain)
@@ -165,6 +175,8 @@ def extract_core(body: str, company: str, domain: str, budget: int, pick: int = 
     for sent in re.split(r"[，。；：、？！…—\n\"“”'']", body):
         sent = sent.strip()
         if not (4 <= len(sent) <= budget):
+            continue
+        if sent in CONNECTIVES:
             continue
         if domain in sent or ".网址" in sent:
             continue
