@@ -151,7 +151,7 @@ def main() -> int:
             if not a.go:
                 print("DRYRUN 完成，未发布。截图：", SHOTS / "csdn-filled.png")
                 return 0
-            do_publish(pg)
+            success_url = do_publish(pg)
         finally:
             browser.close()
 
@@ -160,7 +160,7 @@ def main() -> int:
         "code": a.code, "media": media, "account": account,
         "title": a.title, "published_at": datetime.now().isoformat(timespec="seconds"),
         "status": "审核中",
-        "success_url": None,  # success 页含文章 id，回查时从列表页拿正式链接
+        "success_url": success_url,  # success 页含文章 id，回查直接拼正式链接
     })
     PENDING.write_text(json.dumps(pending, ensure_ascii=False, indent=2))
     print(f"已登记待回查：{PENDING}")

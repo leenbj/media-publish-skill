@@ -103,8 +103,16 @@ def open_gallery(pg) -> None:
     raise RuntimeError("图库抽屉 3 次未打开，截图见 toutiao-gallery-fail.png（可能页面改版，检查 NOTES-toutiao.md）")
 
 
+def ensure_drawer(pg) -> None:
+    """抽屉意外关闭（页面重渲染偶发）时重开，保证后续步骤有抽屉可用。"""
+    if not drawer_open(pg):
+        log("图库抽屉意外关闭，重新打开…")
+        open_gallery(pg)
+
+
 def search_gallery(pg, keyword: str) -> None:
     """切到免费正版图片 tab 并搜索。组合词可能空结果，逐个降级。"""
+    ensure_drawer(pg)
     pg.evaluate("""(() => {
       const t = [...document.querySelectorAll('.byte-tabs-header-title')]
         .find(e => e.textContent.trim() === '免费正版图片')
@@ -138,6 +146,7 @@ def search_gallery(pg, keyword: str) -> None:
 
 def pick_random_image(pg) -> None:
     """随机点一张卡片（只选视口内的，视口外的点不中），等选中标记出现。"""
+    ensure_drawer(pg)
     n, xy = pg.evaluate("""(() => {
       const drawer = document.querySelector('.upload-image-panel').closest('.byte-drawer-wrapper')
       const pane = [...drawer.querySelectorAll('.byte-tabs-content-item')].find(p => p.className.includes('active'))
