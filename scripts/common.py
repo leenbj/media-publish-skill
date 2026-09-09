@@ -106,10 +106,39 @@ COMPANY_TAILS = ("有限责任公司", "股份有限公司", "有限公司",
 # 三级缩写都装不下时的截断锚点：切到“地域+品牌+集团/公司”为止
 ABBR_BOUNDARIES = ("集团", "控股", "实业", "公司", "中心")
 
-# 标题短描述池（过红线安全），按行号轮换保证多样性；
-# 描述只是装饰，装不下时可直接省略，短词排后面兜底
-TITLE_SUFFIXES = ("访问更便捷", "品牌入口升级", "直达官网", "安全又好记",
-                  "一键直达", "认准官方入口", "更便捷", "新入口")
+# 常见行业词（公司名里命中即用，最长匹配优先，如 新能源/医疗器械）
+INDUSTRY_WORDS = (
+    "医疗器械", "新能源", "新材料", "半导体", "机器人", "无人机",
+    "水产", "食品", "医药", "医疗", "科技", "软件", "电子", "机械",
+    "化工", "建材", "纺织", "服装", "汽车", "物流", "旅游", "餐饮",
+    "教育", "金融", "农业", "种业", "出版", "传媒", "建筑", "地产",
+    "物业", "家具", "家电", "照明", "模具", "轴承", "阀门", "电缆",
+    "光伏", "锂电", "芯片", "环保", "节能", "养殖", "种植", "茶叶",
+    "白酒", "乳业", "饮料", "海鲜", "水果", "蔬菜", "花卉", "苗木",
+    "宠物", "母婴", "玩具", "文具", "体育", "健身", "生物",
+)
+
+# 无行业词时的中性兜底（事实陈述，无广告色彩）
+NEUTRAL_SUFFIXES = ("新入口", "官网直达", "中文直达", "品牌直达")
+
+
+def industry_of(company: str) -> str:
+    for w in sorted(INDUSTRY_WORDS, key=len, reverse=True):
+        if w in company:
+            return w
+    return ""
+
+
+def title_suffixes(company: str, pick: int = 0) -> list[str]:
+    """标题描述位：行业相关优先（{行业}新入口/官网直达…），无行业回退中性词。
+    按行号轮换保证同批多样性。"""
+    pool: list[str] = []
+    ind = industry_of(company)
+    if ind:
+        pool += [f"{ind}新入口", f"{ind}官网直达", f"{ind}品牌直达", f"{ind}中文直达"]
+    pool += list(NEUTRAL_SUFFIXES)
+    pool = list(dict.fromkeys(pool))
+    return [pool[(pick + i) % len(pool)] for i in range(len(pool))]
 
 
 def short_company(name: str) -> str:
@@ -135,8 +164,7 @@ def build_title(company: str, domain: str, limit: int = DEFAULT_TITLE_LIMIT,
     """组装标题：名称 + 官网启用 + 域名 + 短描述，保证 len <= limit。
     名称优先级：xlsx 简称列 > 全称 > 去尾缀 > 地域品牌截断；
     描述只是装饰，空间不够时先换短词、再直接省略，保名称+官网启用+域名完整。"""
-    suffixes = [TITLE_SUFFIXES[(pick + i) % len(TITLE_SUFFIXES)]
-                for i in range(len(TITLE_SUFFIXES))]
+    suffixes = title_suffixes(company, pick)
     bases = list(dict.fromkeys(
         [b for b in (short_name.strip(), company,
                      short_company(company), abbr_company(company)) if b]))
