@@ -145,31 +145,36 @@ def search_gallery(pg, keyword: str) -> None:
 
 
 def pick_random_image(pg) -> None:
-    """随机点一张卡片（只选视口内的，视口外的点不中），等选中标记出现。"""
+    """随机点一张卡片（只选视口内的，视口外的点不中），等选中标记出现。
+    长文页面偶发滚动导致坐标漂移，未选中则重算坐标重试 3 次。"""
     ensure_drawer(pg)
-    n, xy = pg.evaluate("""(() => {
-      const drawer = document.querySelector('.upload-image-panel').closest('.byte-drawer-wrapper')
-      const pane = [...drawer.querySelectorAll('.byte-tabs-content-item')].find(p => p.className.includes('active'))
-      const items = [...pane.querySelectorAll('li.item')]
-      const ok = []
-      items.forEach((li, i) => {
-        const r = li.getBoundingClientRect()
-        if (r.width > 50 && r.y >= 0 && r.y + r.height < 800 && r.x >= 280)
-          ok.push([i, Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)])
-      })
-      return [ok.length, ok[Math.floor(Math.random() * ok.length)]]
-    })()""")
-    idx, cx, cy = xy[0], xy[1], xy[2]
-    pg.mouse.click(cx, cy)
-    pg.wait_for_timeout(2000)
-    picked = pg.evaluate("""((idx) => {
-      const drawer = document.querySelector('.upload-image-panel').closest('.byte-drawer-wrapper')
-      const pane = [...drawer.querySelectorAll('.byte-tabs-content-item')].find(p => p.className.includes('active'))
-      return !!(pane.querySelectorAll('li.item')[idx] && pane.querySelectorAll('li.item')[idx].querySelector('.pop-number'))
-    })""", idx)
-    if not picked:
-        raise RuntimeError(f"第 {idx} 张未选中（无 pop-number）")
-    log(f"随机选中第 {idx + 1}/{n} 张")
+    for attempt in (1, 2, 3):
+        n, xy = pg.evaluate("""(() => {
+          const drawer = document.querySelector('.upload-image-panel').closest('.byte-drawer-wrapper')
+          const pane = [...drawer.querySelectorAll('.byte-tabs-content-item')].find(p => p.className.includes('active'))
+          const items = [...pane.querySelectorAll('li.item')]
+          const ok = []
+          items.forEach((li, i) => {
+            const r = li.getBoundingClientRect()
+            if (r.width > 50 && r.y >= 0 && r.y + r.height < 800 && r.x >= 280)
+              ok.push([i, Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)])
+          })
+          return [ok.length, ok[Math.floor(Math.random() * ok.length)]]
+        })()""")
+        idx, cx, cy = xy[0], xy[1], xy[2]
+        pg.mouse.click(cx, cy)
+        pg.wait_for_timeout(2000)
+        picked = pg.evaluate("""((idx) => {
+          const drawer = document.querySelector('.upload-image-panel').closest('.byte-drawer-wrapper')
+          const pane = [...drawer.querySelectorAll('.byte-tabs-content-item')].find(p => p.className.includes('active'))
+          return !!(pane.querySelectorAll('li.item')[idx] && pane.querySelectorAll('li.item')[idx].querySelector('.pop-number'))
+        })""", idx)
+        if picked:
+            log(f"随机选中第 {idx + 1}/{n} 张（{attempt}/3 次）")
+            return
+        log(f"第 {idx} 张未选中，重算坐标重试 {attempt}/3…")
+        pg.wait_for_timeout(1000)
+    raise RuntimeError("随机选图 3 次未选中（页面可能滚动频繁，稍后重试）")
 
 
 def confirm_insert(pg) -> None:

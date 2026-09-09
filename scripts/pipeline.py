@@ -579,7 +579,8 @@ def publish_one(media: str, code: str, title: str, body_file: Path, dryrun: bool
     if not dryrun:
         cmd.append("--go")
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=900, cwd=str(BASE))
-    ok = r.returncode == 0 and ("发布提交成功" in r.stdout or "DRYRUN" in r.stdout)
+    ok = r.returncode == 0 and ("发布提交成功" in r.stdout or "发布提交：" in r.stdout
+                               or "DRYRUN" in r.stdout)
     tail = (r.stdout[-500:] + r.stderr[-200:]).replace("\n", " | ")
     return {"ok": ok, "output": tail}
 
