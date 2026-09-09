@@ -442,7 +442,8 @@ def gen_news_llm(company: str, domain: str, search_note: str, llm_cmd: str) -> t
         return None
 
 
-def gen_news_article(company: str, domain: str, search_note: str) -> tuple[str, str]:
+def gen_news_article(company: str, domain: str, search_note: str,
+                     fact_idx: int = 0) -> tuple[str, str]:
     """标题规则（用户指定）：企业名称 + 官网 + 启用 + 域名。"""
     title = f"{company}官网启用{domain}"
     # 搜索结果里的链接/备案/版权行是元数据噪音，直接丢掉，不进正文
@@ -454,7 +455,7 @@ def gen_news_article(company: str, domain: str, search_note: str) -> tuple[str, 
             continue
         if company[:6] in line and 20 < len(line) < 200 and "###" not in line:
             facts.append(line)
-    fact_txt = facts[0] if facts else f"{company}深耕行业多年，积累了稳定的客户群体与良好的市场口碑。"
+    fact_txt = facts[fact_idx % len(facts)] if facts else f"{company}深耕行业多年，积累了稳定的客户群体与良好的市场口碑。"
     short = company.replace("有限公司", "").replace("有限责任公司", "")
     paras = [
         f"{company}官网启用\"{domain}\"。今后，用户在浏览器地址栏直接输入\"{domain}\"，即可直达{short}官方网站，无需记忆复杂难记的英文字符串。这一举措让企业线上入口与品牌名称实现了统一，也为客户提供了更加便捷、安全的访问体验。",
@@ -679,6 +680,8 @@ def main() -> int:
     ap.add_argument("--dryrun", action="store_true")
     ap.add_argument("--no-publish", action="store_true")
     ap.add_argument("--llm-cmd", default="", help="新闻稿 LLM 命令（默认 $MEDIA_LLM_CMD，为空用内置模板）")
+    ap.add_argument("--variant", type=int, default=0, help="变体种子：换一套标题/角度/引用/事实句，用于重做不同内容")
+    ap.add_argument("--fresh", action="store_true", help="清空输出目录后重做（删掉该域名旧文件）")
     a = ap.parse_args()
 
     xlsx = Path(a.xlsx)
@@ -692,7 +695,11 @@ def main() -> int:
     for i, r in enumerate(rows):
         domain, company = r["domain"], r["company"]
         out_dir = OUTPUT_ROOT / domain  # 文件夹名=域名原样
+        if a.fresh and out_dir.exists():
+            import shutil as _sh
+            _sh.rmtree(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
+        eff = int(r["num"]) + a.variant * 37  # 变体种子：错开轮换，内容不同
         print(f"\n═══ [{r['num']}] {domain} / {company} → {'+'.join(r['codes'])} ═══")
 
         # ① 检索
@@ -707,7 +714,7 @@ def main() -> int:
             _, body = llm_hit
             print("   (LLM 生成)")
         else:
-            _, body = gen_news_article(company, domain, note)
+            _, body = gen_news_article(company, domain, note, a.variant)
         # 正文首段须含全称三要素（位置不限；缺失才在段首补一句）
         lead = f'{company}官网启用"{domain}"。'
         first = body.split("\n\n")[0] if body else ""
@@ -718,10 +725,7 @@ def main() -> int:
         limits = [common.TITLE_LIMIT.get(MEDIA_OF[c], common.DEFAULT_TITLE_LIMIT)
                   for c in r["codes"] if c in MEDIA_OF]
         limit = min(limits) if limits else common.DEFAULT_TITLE_LIMIT
-        try:
-            pick = int(r["num"])
-        except (TypeError, ValueError):
-            pick = 0
+        pick = eff  # 行号 + 变体种子，换种子即换标题/角度/引用
         title = common.build_title(company, domain, limit, pick, r.get("short", ""), body)
         ok, issues = check_content(title, domain)
         if not ok:
