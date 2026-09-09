@@ -50,6 +50,10 @@ MEDIA_PUBLISH = {
 FORBIDDEN = [
     r"[\w-]+\.com\b", r"[\w-]+\.cn\b", r"[\w-]+\.net\b", r"[\w-]+\.org\b",
     r"[\w-]+\.top\b", r"[\w-]+\.vip\b", r"[\w-]+\.shop\b", r"[\w-]+\.xyz\b",
+    r"[\w-]+\.com\.cn\b", r"[\w-]+\.net\.cn\b", r"[\w-]+\.org\.cn\b",
+    r"[\w-]+\.info\b", r"[\w-]+\.biz\b", r"[\w-]+\.(cc|tv|io|ai|me|co)\b",
+    r"[\w-]+\.(club|site|online|store|ltd|name|pro|mobi|asia)\b",
+    r"[\w-]+\.(hk|tw)\b",
     r"\.商标", r"\.商城", r"\.在线", r"\.中国(?!.*网址)", r"\.公司(?!.*网址)",
     r"英文域名", r"国际域名",
     r"中文域名[^。]{0,20}(争议|质疑|缺点|不足|局限性|风险)",
@@ -73,6 +77,8 @@ def clean_text(text: str, domain: str = "") -> str:
     text = html.unescape(text)
     text = text.replace("�", "")
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+    text = text.replace("**", "")  # 搜索结果的加粗标记在纯文本稿里是噪音
+    text = re.sub(r"(?m)^#{1,6}\s+", "", text)  # Markdown 标题标记
     keep = []
     if domain:  # 保护域名与其余 .网址，原样钉住不动
         def _pin(m: re.Match) -> str:
@@ -127,6 +133,77 @@ def scan_text(text: str, domain: str) -> tuple[list[str], list[str]]:
     return hard, warn
 
 
+# 代码字符：出现在新闻稿里即不合格
+CODE_PATTERNS = [
+    ("Markdown代码块", r"```"),
+    ("Markdown标题", r"(?m)^#{1,6}\s"),
+    ("Markdown加粗", r"\*\*.+?\*\*"),
+    ("Markdown链接", r"!\[|\]\("),
+    ("网址链接", r"https?://|www\."),
+    ("JSON残留", r"\{[^\n]{0,60}\w+\s*:"),
+    ("占位符残留", r"__\w+__|\bTODO\b|\bTBD\b|XXX"),
+]
+
+# .网址定向负面词（防范/防止类保护语境除外，见 check_negative）
+NEG_WORDS = ("骗局", "陷阱", "争议", "质疑", "缺点", "不足", "局限", "风险",
+             "隐患", "投诉", "垃圾", "山寨", "不值", "慎用", "圈套", "欺诈", "诈骗")
+PROTECT_WORDS = ("防", "防止", "防范", "谨防", "避免", "打击", "抵制",
+                 "远离", "警惕", "识别")
+
+
+def check_negative(text: str, domain: str) -> list[str]:
+    """负面词与“中文域名/.网址”相距 12 字内、中间无句号阻断、且无保护语境→定向负面。"""
+    issues = []
+    refs = [m.start() for m in re.finditer(r"中文域名|\.网址", text)]
+    if not refs:
+        return issues
+    for w in NEG_WORDS:
+        for m in re.finditer(re.escape(w), text):
+            near = [r for r in refs if abs(r - m.start()) <= 12]
+            if not near:
+                continue
+            r = min(near, key=lambda x: abs(x - m.start()))
+            lo, hi = sorted((r, m.start()))
+            if re.search(r"[。！？]", text[lo:hi]):
+                continue
+            win = text[max(0, m.start() - 12):m.end() + 12]
+            if any(p in win for p in PROTECT_WORDS):
+                continue
+            issues.append(f"[负面指向.网址] …{win.replace(chr(10), ' ')}…")
+    return issues
+
+
+def review_article(title: str, body: str, domain: str) -> tuple[list[str], list[str]]:
+    """稿件审核，返回 (硬错, 告警)：
+    代码字符 / 杂域名后缀 / .网址负面 / 烂尾断句 → 硬错（整行跳过）；
+    通顺可疑 → 告警（照常发布）。"""
+    errors, warnings = [], []
+    hard, warn = scan_text(title + "\n" + body, domain)
+    errors += hard
+    warnings += warn
+    for name, pat in CODE_PATTERNS:
+        for m in re.finditer(pat, title + "\n" + body):
+            ctx = (title + "\n" + body)[max(0, m.start() - 10):m.end() + 10].replace("\n", " ")
+            errors.append(f"[{name}] …{ctx}…")
+    ok, issues = check_content(title + body, domain)
+    errors += [f"[杂域名后缀] {i}" for i in issues]
+    errors += check_negative(title + "\n" + body, domain)
+    paras = [p.strip() for p in body.split("\n") if p.strip()]
+    if not paras:
+        errors.append("[空正文]")
+    else:
+        if not re.search(r"[。！？…」”]$", paras[-1]):
+            errors.append(f"[结尾突兀] …{paras[-1][-25:]}…")
+        for p in paras:
+            if len(p) < 10:
+                warnings.append(f"[过短段落{len(p)}字] …{p[:25]}…")
+    if "启用" not in title or domain not in title:
+        errors.append("[标题缺要素：须含官网启用+域名]")
+    if re.search(r"[，、（：；]$", title.strip()):
+        errors.append(f"[标题结尾突兀] …{title.strip()[-15:]}…")
+    return errors, warnings
+
+
 def search_company(company: str) -> str:
     out = []
     try:
@@ -175,9 +252,13 @@ def gen_news_llm(company: str, domain: str, search_note: str, llm_cmd: str) -> t
 def gen_news_article(company: str, domain: str, search_note: str) -> tuple[str, str]:
     """标题规则（用户指定）：企业名称 + 官网 + 启用 + 域名。"""
     title = f"{company}官网启用{domain}"
+    # 搜索结果里的链接/备案/版权行是元数据噪音，直接丢掉，不进正文
+    JUNK = ("http", "www.", "URL:", ".com", ".cn", ".net", "©", "版权", "备案", " | ")
     facts = []
     for line in search_note.split("\n"):
         line = re.sub(r"^[#*\-\s]*", "", line).strip()
+        if any(j in line for j in JUNK):
+            continue
         if company[:6] in line and 20 < len(line) < 200 and "###" not in line:
             facts.append(line)
     fact_txt = facts[0] if facts else f"{company}深耕行业多年，积累了稳定的客户群体与良好的市场口碑。"
@@ -429,19 +510,21 @@ def main() -> int:
             if not ok:
                 print("   ✗ 仍不合规，跳过", issues[:3])
                 continue
-        # ③ 文字质检：乱码硬拦（跳过本行），通顺问题只告警
-        hard, warn = scan_text(title + "\n" + body, domain)
-        if hard:
-            print(f"   ✗ 文字硬错，跳过: {hard[:3]}")
+        # ③ 稿件审核：代码字符/烂尾/杂后缀/负面→硬错跳过；通顺可疑→告警
+        print("③ 稿件审核…")
+        errors, warnings = review_article(title, body, domain)
+        if errors:
+            print(f"   ✗ 审核未过，跳过: {errors[:4]}")
             continue
-        for w in warn[:5]:
-            print(f"   ⚠ 通顺告警{w}")
+        for w in warnings[:5]:
+            print(f"   ⚠ 审核告警{w}")
+        print("   审核通过 ✓")
         md_file = out_dir / f"{title}.md"
         md_file.write_text(f"{title}\n\n{body}", encoding="utf-8")
         print(f"   {md_file.name}")
 
         # ③ GEO 网页
-        print("③ 生成人民网风格 GEO 网页…")
+        print("④ 生成人民网风格 GEO 网页…")
         (out_dir / f"{title}.html").write_text(
             news_html(domain, title, body.split("\n\n"), company), encoding="utf-8")
         for n in range(1, 4):
@@ -451,7 +534,7 @@ def main() -> int:
         print(f"   1 新闻页 + 3 QA 页 → {out_dir}")
 
         if a.no_publish:
-            print("④ 跳过发布（--no-publish）")
+            print("⑤ 跳过发布（--no-publish）")
             continue
 
         # ④ 逐媒体发布
@@ -462,7 +545,7 @@ def main() -> int:
             if not media:
                 print(f"④ 未知编码 {code}，跳过")
                 continue
-            print(f"④ 发布到 {media}（{code}）…")
+            print(f"⑤ 发布到 {media}（{code}）…")
             res = publish_one(media, code, title, body_file, a.dryrun)
             print("   " + ("✓ " if res["ok"] else "✗ ") + res["output"][-180:])
             if not res["ok"]:
