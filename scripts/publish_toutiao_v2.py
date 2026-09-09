@@ -33,12 +33,29 @@ def log(msg: str) -> None:
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def close_ai_drawer(pg) -> None:
-    pg.evaluate("""(() => {
-      const b = document.querySelector('.ai-assistant-drawer svg.close-btn')
-      if (b) b.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}))
+def drawer_open(pg) -> bool:
+    return pg.evaluate("""(() => {
+      const panel = document.querySelector('.upload-image-panel')
+      if (!panel) return false
+      const drawer = panel.closest('.byte-drawer-wrapper')
+      return !!drawer && drawer.offsetWidth > 0
     })()""")
-    pg.wait_for_timeout(1500)
+
+
+def close_ai_drawer(pg) -> None:
+    """关 AI 助手抽屉（它会挡工具栏点击）；确认关闭，关不掉打日志继续。"""
+    for _ in range(3):
+        gone = pg.evaluate("""(() => {
+          const d = document.querySelector('.ai-assistant-drawer')
+          if (!d || !d.offsetParent) return true
+          const b = d.querySelector('svg.close-btn')
+          if (b) b.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}))
+          return false
+        })()""")
+        pg.wait_for_timeout(1200)
+        if gone:
+            return
+    log("AI 抽屉未能确认关闭，继续（可能挡住工具栏）")
 
 
 def fill_article(pg, title: str, paras: list[str]) -> None:
@@ -59,25 +76,31 @@ def fill_article(pg, title: str, paras: list[str]) -> None:
 
 
 def open_gallery(pg) -> None:
-    """点工具栏图片按钮打开图库抽屉（实测 = 可见工具栏按钮 index 11）。"""
-    pg.evaluate("window.scrollTo(0, 0)")
-    pg.wait_for_timeout(500)
-    xy = pg.evaluate("""(() => {
-      const btns = [...document.querySelectorAll('button.syl-toolbar-button')].filter(b => b.offsetParent)
-      const r = btns[11].getBoundingClientRect()
-      return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
-    })()""")
-    pg.mouse.click(xy[0], xy[1])
-    pg.wait_for_timeout(2500)
-    ok = pg.evaluate("""(() => {
-      const panel = document.querySelector('.upload-image-panel')
-      if (!panel) return false
-      const drawer = panel.closest('.byte-drawer-wrapper')
-      return !!drawer && drawer.offsetWidth > 0
-    })()""")
-    if not ok:
-        raise RuntimeError("图库抽屉未打开")
-    log("图库抽屉已打开")
+    """点工具栏图片按钮打开图库抽屉（实测 = 可见工具栏按钮 index 11）。
+    偶发打不开（AI 抽屉遮挡/工具栏未稳定），最多重试 3 次。"""
+    for attempt in (1, 2, 3):
+        close_ai_drawer(pg)  # 重试前确保遮挡已除
+        pg.evaluate("window.scrollTo(0, 0)")
+        pg.wait_for_timeout(800)
+        info = pg.evaluate("""(() => {
+          const btns = [...document.querySelectorAll('button.syl-toolbar-button')].filter(b => b.offsetParent)
+          if (btns.length <= 11) return {n: btns.length}
+          const r = btns[11].getBoundingClientRect()
+          return {n: btns.length, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)}
+        })()""")
+        if "x" not in info:
+            log(f"图库按钮缺失（仅 {info['n']} 个可见按钮），重试 {attempt}/3")
+            pg.wait_for_timeout(2000)
+            continue
+        pg.mouse.click(info["x"], info["y"])
+        pg.wait_for_timeout(2500)
+        if drawer_open(pg):
+            log(f"图库抽屉已打开（{attempt}/3 次）")
+            return
+        log(f"第 {attempt}/3 次点击无反应，重试…")
+        pg.wait_for_timeout(1500)
+    pg.screenshot(path=str(SHOTS / "toutiao-gallery-fail.png"))
+    raise RuntimeError("图库抽屉 3 次未打开，截图见 toutiao-gallery-fail.png（可能页面改版，检查 NOTES-toutiao.md）")
 
 
 def search_gallery(pg, keyword: str) -> None:
