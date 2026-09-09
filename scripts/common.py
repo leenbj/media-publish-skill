@@ -110,9 +110,9 @@ ABBR_BOUNDARIES = ("集团", "控股", "实业", "公司", "中心")
 # 标题描述位：中性事实陈述，无广告色彩，按行号轮换保证同批多样性
 NEUTRAL_SUFFIXES = ("新入口", "官网直达", "中文直达", "品牌直达", "正式启用")
 
-# 正文核心短语锚点：动词+宾语片段（如 深耕水产食品行业多年/成立于2003年）
-CORE_VERBS = ("深耕", "专注于", "专注", "聚焦", "主营", "从事", "致力于",
-              "打造", "拥有", "始创于", "成立于", "位于", "覆盖", "畅销", "远销")
+# 正文主题词：后缀只收与品牌/数字化主题相关的短句，事实碎片（如成立年份）不要
+THEME_WORDS = ("品牌", "保护", "防伪", "安全", "数字化", "数字", "便捷",
+               "直达", "资产", "口碑", "体验", "信任", "可信", "入口", "直达")
 
 
 def title_suffixes(pick: int = 0) -> list[str]:
@@ -120,23 +120,47 @@ def title_suffixes(pick: int = 0) -> list[str]:
     return [pool[(pick + i) % len(pool)] for i in range(len(pool))]
 
 
-def extract_core(body: str, company: str, domain: str, budget: int) -> str:
-    """从正文提取核心短语作标题后缀：找动词锚点，取到标点为止的片段。
-    只接受自然装下（不硬截，保证不断章），含公司名/域名的跳过；没有返回空串。"""
-    if budget < 2 or not body:
+# 无意义通用词：单独成后缀等于没说，一律不要
+GENERIC_WORDS = {"网址", "域名", "中文", "官网", "公司", "企业", "网站",
+                 "品牌", "互联网", "用户", "客户", "产品", "服务"}
+
+
+def _clean_frag(frag: str, company: str, domain: str, lo: int, hi: int) -> str:
+    """片段合规检查：长度区间内、不含公司名/域名/英文后缀、非通用词。"""
+    frag = frag.strip().strip("\"“”' '")
+    if not (lo <= len(frag) <= hi):
         return ""
-    stop = re.compile(r"[，。；：、？！…—\n\"“”]")
-    tail = re.compile(r"(多年|以来|至今|之一|第一|领先|行业|领域|产业|的|了)$")
-    for m in re.finditer("|".join(CORE_VERBS), body):
-        frag = stop.split(body[m.start():])[0].strip().strip("\"“”")
-        old = None
-        while old != frag:  # 迭代去尾缀修饰，留核心（如 …行业多年→…水产食品）
-            old, frag = frag, tail.sub("", frag)
-        if not frag or domain in frag or ".网址" in frag:
+    if domain in frag or ".网址" in frag or frag in domain:
+        return ""
+    if frag in GENERIC_WORDS:
+        return ""
+    if company and len(company) >= 4 and (company[:4] in frag or frag in company):
+        return ""
+    if re.search(r"[a-zA-Z]{3,}|\.com|\.cn", frag):
+        return ""
+    return frag
+
+
+def extract_core(body: str, company: str, domain: str, budget: int) -> str:
+    """从正文提取主题金句作标题后缀（按顺序兜底）：
+    1. 引号里的短语（所见即所得/品牌即网址这类文章金句）；
+    2. 含主题词的短句（品牌/安全/数字化…）；
+    3. 提不出返回空串，调用方回退中性池。只取自然装下的，不断章。"""
+    if budget < 4 or not body:
+        return ""
+    for m in re.finditer(r'"([^"]{2,12})"|“([^”]{2,12})”', body):
+        frag = _clean_frag(m.group(1) or m.group(2), company, domain, 2, budget)
+        if frag:
+            return frag
+    stop = re.compile(r"[，。；：、？！…—\n]")
+    for sent in stop.split(body):
+        sent = sent.strip()
+        if len(sent) > budget or len(sent) < 4:
             continue
-        if company and len(company) >= 4 and company[:4] in frag:
+        if not any(w in sent for w in THEME_WORDS):
             continue
-        if 2 <= len(frag) <= budget:
+        frag = _clean_frag(sent, company, domain, 4, budget)
+        if frag:
             return frag
     return ""
 
