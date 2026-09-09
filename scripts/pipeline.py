@@ -88,7 +88,7 @@ def gen_news_llm(company: str, domain: str, search_note: str, llm_cmd: str) -> t
     if not llm_cmd:
         return None
     prompt = (f"你是中文域名行业新闻写手。为“{company}”（官网启用中文域名“{domain}”）写一篇 5 段新闻稿。\n"
-               f"要求：正文第一段第一句必须是“{company}官网启用“{domain}”。”（全称+官网启用+域名，一个字不差）；"
+               f"要求：正文首段内必须包含“{company}官网启用“{domain}””（全称+官网启用+域名，位置不限）；"
                f"只许出现 .网址 后缀，禁止 .com/.cn 等其他后缀、"
                f"禁止“英文域名/国际域名”字样；人民网风格，每段 120~200 字；直接输出正文（段落间空行分隔），不要标题行。\n"
                f"企业资料（可引用事实，不可编造数据）：\n{search_note[:3000]}")
@@ -337,9 +337,10 @@ def main() -> int:
             print("   (LLM 生成)")
         else:
             _, body = gen_news_article(company, domain, note)
-        # 正文首段必须亮出全称：公司全称+官网启用+域名（LLM 漏写时补上）
+        # 正文首段须含全称三要素（位置不限；缺失才在段首补一句）
         lead = f'{company}官网启用"{domain}"。'
-        if not body.startswith(company):
+        first = body.split("\n\n")[0] if body else ""
+        if not (company in first and "启用" in first and domain in first):
             body = lead + body
         # 标题：企业名称+官网启用+域名+短描述，按本行目标媒体的最严字数上限裁剪
         limits = [common.TITLE_LIMIT.get(MEDIA_OF[c], common.DEFAULT_TITLE_LIMIT)
