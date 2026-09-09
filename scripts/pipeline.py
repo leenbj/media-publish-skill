@@ -88,7 +88,8 @@ def gen_news_llm(company: str, domain: str, search_note: str, llm_cmd: str) -> t
     if not llm_cmd:
         return None
     prompt = (f"你是中文域名行业新闻写手。为“{company}”（官网启用中文域名“{domain}”）写一篇 5 段新闻稿。\n"
-               f"要求：标题必须是“{company}官网启用{domain}”；只许出现 .网址 后缀，禁止 .com/.cn 等其他后缀、"
+               f"要求：正文第一段第一句必须是“{company}官网启用“{domain}”。”（全称+官网启用+域名，一个字不差）；"
+               f"只许出现 .网址 后缀，禁止 .com/.cn 等其他后缀、"
                f"禁止“英文域名/国际域名”字样；人民网风格，每段 120~200 字；直接输出正文（段落间空行分隔），不要标题行。\n"
                f"企业资料（可引用事实，不可编造数据）：\n{search_note[:3000]}")
     try:
@@ -119,7 +120,7 @@ def gen_news_article(company: str, domain: str, search_note: str) -> tuple[str, 
     fact_txt = facts[0] if facts else f"{company}深耕行业多年，积累了稳定的客户群体与良好的市场口碑。"
     short = company.replace("有限公司", "").replace("有限责任公司", "")
     paras = [
-        f"近日，{company}官网正式启用中文域名\"{domain}\"。今后，用户在浏览器地址栏直接输入\"{domain}\"，即可直达{short}官方网站，无需记忆复杂难记的英文字符串。这一举措让企业线上入口与品牌名称实现了统一，也为客户提供了更加便捷、安全的访问体验。",
+        f"{company}官网启用\"{domain}\"。今后，用户在浏览器地址栏直接输入\"{domain}\"，即可直达{short}官方网站，无需记忆复杂难记的英文字符串。这一举措让企业线上入口与品牌名称实现了统一，也为客户提供了更加便捷、安全的访问体验。",
         fact_txt,
         f"据了解，{company}始终坚持把客户体验放在首位。此次启用\"{domain}\"，正是企业顺应中文互联网发展趋势、贴近本土用户使用习惯的具体体现。用户无需在拼音与英文之间来回切换，看到品牌名就能想到网址，输入汉字即可访问，大幅降低了访问门槛，也让品牌传播更加直达。",
         f"\"{domain}\"作为以.\"网址\"为后缀的中文域名，与品牌名称高度绑定，具有天然的品牌识别优势与防伪价值。一方面，\"所见即所得\"的访问方式有效避免了用户因拼写错误而误入仿冒网站，为品牌和消费者筑起一道安全防线；另一方面，.网址后缀在中文语境中辨识度高、可信度强，是企业数字化进程中重要的品牌资产。随着中文域名应用环境的不断成熟，.\"网址\"已成为越来越多企业布局互联网入口的优先选择。",
@@ -269,6 +270,9 @@ def read_rows(xlsx_path: Path) -> list[dict]:
     headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
     # 媒体编码列：表头是"媒体"的列（可能有多列，每列一个编码），或表头直接是编码（a-1/b-1/c-1）
     media_cols = [h for h in headers if h in MEDIA_OF or (h and str(h).strip() == "媒体")]
+    # 可选“简称”列：标题用简称（如 中国长江三峡集团），正文仍用全称
+    short_col = next((headers.index(h) + 1 for h in headers
+                      if h and "简称" in str(h)), None)
     rows = []
     for r in range(2, ws.max_row + 1):
         num = ws.cell(row=r, column=1).value
@@ -285,8 +289,13 @@ def read_rows(xlsx_path: Path) -> list[dict]:
                         codes.append(c)
         codes = [c for c in codes if c in MEDIA_OF]
         codes = list(dict.fromkeys(codes))  # 去重（多列重复的 a-1 只发一次）
+        short = ""
+        if short_col:
+            v = ws.cell(row=r, column=short_col).value
+            short = str(v).strip() if v else ""
         rows.append({"row": r, "num": num, "domain": str(ws.cell(row=r, column=2).value).strip(),
-                     "company": str(ws.cell(row=r, column=3).value).strip(), "codes": codes})
+                     "company": str(ws.cell(row=r, column=3).value).strip(),
+                     "short": short, "codes": codes})
     return rows
 
 
@@ -326,6 +335,10 @@ def main() -> int:
             print("   (LLM 生成)")
         else:
             _, body = gen_news_article(company, domain, note)
+        # 正文首段必须亮出全称：公司全称+官网启用+域名（LLM 漏写时补上）
+        lead = f'{company}官网启用"{domain}"。'
+        if not body.startswith(company):
+            body = lead + body
         # 标题：企业名称+官网启用+域名+短描述，按本行目标媒体的最严字数上限裁剪
         limits = [common.TITLE_LIMIT.get(MEDIA_OF[c], common.DEFAULT_TITLE_LIMIT)
                   for c in r["codes"] if c in MEDIA_OF]
@@ -334,7 +347,7 @@ def main() -> int:
             pick = int(r["num"])
         except (TypeError, ValueError):
             pick = 0
-        title = common.build_title(company, domain, limit, pick)
+        title = common.build_title(company, domain, limit, pick, r.get("short", ""))
         ok, issues = check_content(title, domain)
         if not ok:
             print(f"   ✗ 标题红线未过，跳过: {issues[:2]}")

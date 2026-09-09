@@ -98,12 +98,18 @@ def resolve_anysearch() -> list[str]:
 TITLE_LIMIT = {"toutiao": 30, "sohu": 72, "csdn": 100}
 DEFAULT_TITLE_LIMIT = 30  # 多媒体同发时取各目标中最严的一个
 
-# 公司名缩写：超长时依次剥离这些尾缀（保留核心品牌名）
-COMPANY_TAILS = ("有限责任公司", "股份有限公司", "集团有限公司", "有限公司", "集团", "公司")
+# 公司名缩写：超长时剥离这些尾缀（保留地域+品牌，如 …集团有限公司→…集团）
+# 注意顺序：“有限公司”必须排在“集团有限公司”之前，否则后者先命中会多剥掉“集团”
+COMPANY_TAILS = ("有限责任公司", "股份有限公司", "有限公司",
+                  "集团有限公司", "实业有限公司", "集团公司")
 
-# 标题短描述池（全部 ≤6 字、过红线安全），按行号轮换保证多样性
+# 三级缩写都装不下时的截断锚点：切到“地域+品牌+集团/公司”为止
+ABBR_BOUNDARIES = ("集团", "控股", "实业", "公司", "中心")
+
+# 标题短描述池（过红线安全），按行号轮换保证多样性；
+# 描述只是装饰，装不下时可直接省略，短词排后面兜底
 TITLE_SUFFIXES = ("访问更便捷", "品牌入口升级", "直达官网", "安全又好记",
-                  "一键直达", "认准官方入口")
+                  "一键直达", "认准官方入口", "更便捷", "新入口")
 
 
 def short_company(name: str) -> str:
@@ -113,24 +119,41 @@ def short_company(name: str) -> str:
     return name
 
 
+def abbr_company(name: str) -> str:
+    """激进缩写：先去尾缀，再按 集团/控股/公司 等边界截断，保留地域+品牌。
+    如：中国长江三峡集团有限公司新能源发展有限责任公司 → 中国长江三峡集团。"""
+    s = short_company(name)
+    for kw in ABBR_BOUNDARIES:
+        i = s.find(kw)
+        if i >= 2:
+            return s[:i + len(kw)]
+    return s
+
+
 def build_title(company: str, domain: str, limit: int = DEFAULT_TITLE_LIMIT,
-                pick: int = 0) -> str:
-    """组装标题：企业名称 + 官网启用 + 域名 + 短描述，保证 len <= limit。
-    策略：全称+描述 → 缩写+描述 → 全称（无描述位时）→ 硬截（域名完整优先）。"""
+                pick: int = 0, short_name: str = "") -> str:
+    """组装标题：名称 + 官网启用 + 域名 + 短描述，保证 len <= limit。
+    名称优先级：xlsx 简称列 > 全称 > 去尾缀 > 地域品牌截断；
+    描述只是装饰，空间不够时先换短词、再直接省略，保名称+官网启用+域名完整。"""
     suffixes = [TITLE_SUFFIXES[(pick + i) % len(TITLE_SUFFIXES)]
                 for i in range(len(TITLE_SUFFIXES))]
-    for base in (company, short_company(company)):
+    bases = list(dict.fromkeys(
+        [b for b in (short_name.strip(), company,
+                     short_company(company), abbr_company(company)) if b]))
+    for base in bases:
         stem = f"{base}官网启用{domain}"
         for sfx in suffixes:
             t = f"{stem}，{sfx}"
             if len(t) <= limit:
                 return t
+    for base in bases:  # 描述位让路：名称+官网启用+域名优先
+        stem = f"{base}官网启用{domain}"
         if len(stem) <= limit:
             return stem
-    # 极端超长：截公司名，保“官网启用+域名+描述”完整
-    core = f"官网启用{domain}，{suffixes[0]}"
+    # 极端超长：截公司名，保“官网启用+域名”完整
+    core = f"官网启用{domain}"
     keep = max(2, limit - len(core))
-    return company[:keep] + core
+    return bases[-1][:keep] + core
 
 
 def title_warning(title: str, media: str) -> str:
