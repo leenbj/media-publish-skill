@@ -10,7 +10,6 @@ accounts.yaml 是唯一真实来源；环境变量可覆盖：
 from __future__ import annotations
 
 import os
-import re
 import shlex
 import shutil
 from pathlib import Path
@@ -110,9 +109,14 @@ ABBR_BOUNDARIES = ("集团", "控股", "实业", "公司", "中心")
 # 标题描述位：中性事实陈述，无广告色彩，按行号轮换保证同批多样性
 NEUTRAL_SUFFIXES = ("新入口", "官网直达", "中文直达", "品牌直达", "正式启用")
 
-# 正文主题词：后缀只收与品牌/数字化主题相关的短句，事实碎片（如成立年份）不要
-THEME_WORDS = ("品牌", "保护", "防伪", "安全", "数字化", "数字", "便捷",
-               "直达", "资产", "口碑", "体验", "信任", "可信", "入口", "直达")
+# 标题描述位：描述性语言（非广告语），按正文命中的主题选择
+THEME_MAP = (
+    (("假冒", "仿冒", "防伪", "钓鱼", "品牌保护", "维权", "品牌资产"), "品牌保护"),
+    (("数字化", "转型", "生态", "前瞻"), "数字化升级"),
+    (("直达", "好记", "所见即所得", "输入"), "中文直达"),
+    (("安全", "信任", "可信", "防线"), "安全升级"),
+    (("体验", "服务", "便捷", "门槛"), "体验升级"),
+)
 
 
 def title_suffixes(pick: int = 0) -> list[str]:
@@ -120,49 +124,16 @@ def title_suffixes(pick: int = 0) -> list[str]:
     return [pool[(pick + i) % len(pool)] for i in range(len(pool))]
 
 
-# 无意义通用词：单独成后缀等于没说，一律不要
-GENERIC_WORDS = {"网址", "域名", "中文", "官网", "公司", "企业", "网站",
-                 "品牌", "互联网", "用户", "客户", "产品", "服务"}
-
-
-def _clean_frag(frag: str, company: str, domain: str, lo: int, hi: int) -> str:
-    """片段合规检查：长度区间内、不含公司名/域名/英文后缀、非通用词。"""
-    frag = frag.strip().strip("\"“”' '")
-    if not (lo <= len(frag) <= hi):
+def extract_core(body: str, company: str, domain: str, budget: int, pick: int = 0) -> str:
+    """从正文主题选描述词作标题后缀：命中多个主题按行号轮换；
+    提不出/装不下返回空串，调用方回退中性池。"""
+    if budget < 2 or not body:
         return ""
-    if domain in frag or ".网址" in frag or frag in domain:
+    matched = [phrase for kws, phrase in THEME_MAP
+               if len(phrase) <= budget and any(k in body for k in kws)]
+    if not matched:
         return ""
-    if frag in GENERIC_WORDS:
-        return ""
-    if company and len(company) >= 4 and (company[:4] in frag or frag in company):
-        return ""
-    if re.search(r"[a-zA-Z]{3,}|\.com|\.cn", frag):
-        return ""
-    return frag
-
-
-def extract_core(body: str, company: str, domain: str, budget: int) -> str:
-    """从正文提取主题金句作标题后缀（按顺序兜底）：
-    1. 引号里的短语（所见即所得/品牌即网址这类文章金句）；
-    2. 含主题词的短句（品牌/安全/数字化…）；
-    3. 提不出返回空串，调用方回退中性池。只取自然装下的，不断章。"""
-    if budget < 4 or not body:
-        return ""
-    for m in re.finditer(r'"([^"]{2,12})"|“([^”]{2,12})”', body):
-        frag = _clean_frag(m.group(1) or m.group(2), company, domain, 2, budget)
-        if frag:
-            return frag
-    stop = re.compile(r"[，。；：、？！…—\n]")
-    for sent in stop.split(body):
-        sent = sent.strip()
-        if len(sent) > budget or len(sent) < 4:
-            continue
-        if not any(w in sent for w in THEME_WORDS):
-            continue
-        frag = _clean_frag(sent, company, domain, 4, budget)
-        if frag:
-            return frag
-    return ""
+    return matched[pick % len(matched)]
 
 
 def short_company(name: str) -> str:
@@ -196,7 +167,7 @@ def build_title(company: str, domain: str, limit: int = DEFAULT_TITLE_LIMIT,
     for base in bases:
         stem = f"{base}官网启用{domain}"
         cands = list(suffixes)
-        core = extract_core(content, company, domain, limit - len(stem) - 1)
+        core = extract_core(content, company, domain, limit - len(stem) - 1, pick)
         if core:
             cands.insert(0, core)
         for sfx in cands:
