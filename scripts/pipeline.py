@@ -691,10 +691,10 @@ def gen_news_llm(company: str, domain: str, search_note: str,
     return body
 
 
-# 标题广告腔硬校验：命中即不合格（新闻标题禁夸赞/营销/号召）
+# 标题广告腔硬校验：命中即不合格（新闻标题禁夸赞/营销/号召/导流）
 AD_STYLE_PAT = re.compile(
     r"重磅|震撼|领先|首选|顶级|极致|赋能|助力|喜讯|隆重|盛大|强势|"
-    r"一站式|完美|放心选择|不容错过|敬请期待|！")
+    r"一站式|完美|放心选择|不容错过|敬请期待|全新|官网入口|官网地址|！")
 
 
 def gen_title_llm(company: str, short_name: str, body: str, limit: int, cmd: str,
@@ -706,10 +706,11 @@ def gen_title_llm(company: str, short_name: str, body: str, limit: int, cmd: str
         return None
     name = (short_name or "").strip()
     name_note = f"{company}（简称：{name}）" if name else company
-    prompt = (f"为下面这篇新闻稿拟一个正常的新闻文章标题。"
+    prompt = (f"为下面这篇新闻稿拟一个新闻标题，像媒体记者报道企业动态：第三人称、克制陈述事实。"
+              f"角度从正文内容里自选，不限于域名启用这一件事，企业资料、行业数字化等正文写到的内容都可以做角度；"
+              f"口吻参考（只学风格，不要照抄）：烟台某水产公司启用中文域名 / 某品牌.网址投入使用，企业统一线上入口；"
+              f"禁止广告、宣传、导流口吻：不用“官网入口、官网地址、全新”等词，不用夸赞、营销、号召类措辞和感叹号；"
               f"标题根据文章内容自由拟写，不要套用任何固定格式或标签拼接；"
-              f"风格是客观新闻报道，像正规媒体的新闻标题：陈述事实、克制、不用形容词堆砌；"
-              f"不要广告或宣传口吻，禁止夸赞、营销、号召类措辞和感叹号；"
               f"标题中要出现企业名称或简称：{name_note}；"
               f"严格不超过{limit}个字；只输出标题本身，不要引号、前缀或任何说明。\n\n{body[:4000]}")
     used = [t for t in list(used_titles)[:8] if t]
@@ -731,7 +732,7 @@ def gen_title_llm(company: str, short_name: str, body: str, limit: int, cmd: str
         if attempt == 1:
             prompt += (f"\n\n注意：上次结果不合格。标题必须包含“{company}”或“{name}”，"
                        f"且总长严格不超过{limit}个字，并且必须保持客观新闻报道风格，"
-                       f"不得出现广告、夸赞、营销、号召类措辞。")
+                       f"不得出现广告、夸赞、营销、号召类措辞，也不要“官网入口、官网地址”这类导流词。")
     return None
 
 
