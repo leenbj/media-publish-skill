@@ -691,17 +691,25 @@ def gen_news_llm(company: str, domain: str, search_note: str,
     return body
 
 
+# 标题广告腔硬校验：命中即不合格（新闻标题禁夸赞/营销/号召）
+AD_STYLE_PAT = re.compile(
+    r"重磅|震撼|领先|首选|顶级|极致|赋能|助力|喜讯|隆重|盛大|强势|"
+    r"一站式|完美|放心选择|不容错过|敬请期待|！")
+
+
 def gen_title_llm(company: str, short_name: str, body: str, limit: int, cmd: str,
                   used_titles=()) -> str | None:
-    """标题由 LLM 按正文自由拟：唯一硬要求是含企业全称或简称，不套任何格式模板。
+    """标题由 LLM 按正文自由拟：须含企业全称或简称，新闻报道风格，不套任何格式模板。
 
-    仅额外卡平台上限字数与重名规避；两次不成才退回 build_title 兜底。"""
+    仅额外卡平台上限字数、重名规避与广告腔硬校验；两次不成才退回 build_title 兜底。"""
     if not cmd:
         return None
     name = (short_name or "").strip()
     name_note = f"{company}（简称：{name}）" if name else company
     prompt = (f"为下面这篇新闻稿拟一个正常的新闻文章标题。"
               f"标题根据文章内容自由拟写，不要套用任何固定格式或标签拼接；"
+              f"风格是客观新闻报道，像正规媒体的新闻标题：陈述事实、克制、不用形容词堆砌；"
+              f"不要广告或宣传口吻，禁止夸赞、营销、号召类措辞和感叹号；"
               f"标题中要出现企业名称或简称：{name_note}；"
               f"严格不超过{limit}个字；只输出标题本身，不要引号、前缀或任何说明。\n\n{body[:4000]}")
     used = [t for t in list(used_titles)[:8] if t]
@@ -712,13 +720,18 @@ def gen_title_llm(company: str, short_name: str, body: str, limit: int, cmd: str
         if not out:
             continue
         title = out.strip().splitlines()[0].strip().strip("“”\"'《》")
-        if title and len(title) <= limit and (company in title or (name and name in title)):
+        bad = AD_STYLE_PAT.search(title)
+        if bad:
+            print(f"   (LLM标题第{attempt}次含广告腔“{bad.group()}”：{title[:40]})")
+        elif title and len(title) <= limit and (company in title or (name and name in title)):
             return title
-        print(f"   (LLM标题第{attempt}次不合格：{title[:40] if title else '(空)'}，"
-              f"须含企业名且≤{limit}字)")
+        else:
+            print(f"   (LLM标题第{attempt}次不合格：{title[:40] if title else '(空)'}，"
+                  f"须含企业名且≤{limit}字)")
         if attempt == 1:
             prompt += (f"\n\n注意：上次结果不合格。标题必须包含“{company}”或“{name}”，"
-                       f"且总长严格不超过{limit}个字。")
+                       f"且总长严格不超过{limit}个字，并且必须保持客观新闻报道风格，"
+                       f"不得出现广告、夸赞、营销、号召类措辞。")
     return None
 
 
