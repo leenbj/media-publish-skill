@@ -5,9 +5,10 @@ description: >
   + 人民网风格 GEO 网页（1 新闻页 + 3 QA 页），按账号编码自动发布到搜狐号
   (a-1)/头条号 (b-1)/CSDN (c-1/c-2)，回查正式链接并回写表格。生成稿件时强制
   先按 human-writing 写实，再按 humanizer-zh 清理残留 AI 腔。Use when the user
-  asks to publish 中文域名/.网址 news from a spreadsheet, or mentions
+  asks to publish 中文域名/.网址 news from a spreadsheet, submit local articles
+  to 头条号/CSDN, or mentions 生成新闻稿、写新闻、中文域名新闻、发布文章、
   搜狐号/头条号/CSDN 批量发布、pipeline.py、setup_accounts.py、collect_links、
-  human-writing、Humanizer-zh。
+  human-writing、Humanizer-zh。Replaces the former chinese-domain-news and fabu skills.
 ---
 
 # Media Publish Skill
