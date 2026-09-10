@@ -2,19 +2,20 @@
 """一站式发布流水线 v2.1（skill 核心）。
 
 输入：xlsx（列：编号 | 域名 | 企业名称 | 媒体 | 媒体 | 媒体…，每行可发多个媒体）
-流程：读表 → anysearch 查企业资料 → 生成新闻稿（标题=企业名称+官网+启用+域名）→
-     红线检查 → 生成人民网风格 GEO 网页（1 新闻页 + 3 QA 页）→
+流程：读表 → anysearch 查企业资料 → human-writing 写实 → humanizer-zh 清腔 →
+     生成新闻稿（标题=企业名称或简称+新闻事实角度）→ 红线检查 →
+     生成人民网风格 GEO 网页（1 新闻页 + 3 QA 页）→
      全部存入 output/<域名原样>/ → 逐媒体发布 → 回查正式链接 → 回写 xlsx（每个媒体一列）。
 
 产出文件命名：
   output/海宝源.网址/
-    ├── 烟台海烟水产食品有限公司官网启用海宝源.网址.md
-    ├── 烟台海烟水产食品有限公司官网启用海宝源.网址.html        ← 新闻页
-    ├── 烟台海烟水产食品有限公司官网启用海宝源.网址-QA1.html     ← QA 页 ×3
+    ├── 烟台海烟水产食品有限公司更新官网入口，启用“海宝源.网址”.md
+    ├── 烟台海烟水产食品有限公司更新官网入口，启用“海宝源.网址”.html ← 新闻页
+    ├── 烟台海烟水产食品有限公司官网-QA1.html                    ← QA 页 ×3
     ├── ...
     └── _publish_body.txt（发布用临时正文）
 
-xlsx 回写：每个媒体编码（a-1/b-1/c-1）各占一列，发布后写正式链接，
+xlsx 回写：每个媒体编码（a-1/b-1/c-1/c-2）各占一列，发布后写正式链接，
 审核中写"(审核中)"占位，回查脚本下次覆盖。
 """
 from __future__ import annotations
@@ -23,7 +24,9 @@ import argparse
 import csv
 import html
 import json
+import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime
@@ -45,6 +48,22 @@ MEDIA_PUBLISH = {
     "toutiao": BASE / "scripts" / "publish_toutiao_v2.py",
     "csdn": BASE / "scripts" / "publish_csdn.py",
 }
+HUMANIZED_CHECK = BASE / "scripts" / "check_humanized.py"
+MIN_NEWS_BODY_CHARS = 1000  # 新闻稿正文最低字数（不含标题和 Markdown 空白）
+URL_MATERIAL = BASE / "references" / "url-material.md"
+
+
+def url_material_context() -> str:
+    """读取用户提供的 `.网址` 背景提炼，供写作第三部分使用。
+
+    运行环境缺少该参考文件时仍能生成稿件，但只启用最小的中性说明，避免
+    把销售页口号或无法核验的法律/营销结论写进新闻。
+    """
+    try:
+        return URL_MATERIAL.read_text(encoding="utf-8")[:5000]
+    except OSError:
+        return ("`.网址` 是中文域名后缀，可作为中文品牌的官网入口标识。只能写识别、"
+                "访问和资料统一层面的意义，不能承诺流量、排名、销量或法律结果。")
 
 # ── .网址 宣传红线 ──
 FORBIDDEN = [
@@ -111,6 +130,13 @@ WARN_PATTERNS = [
     ("半角标点夹中文", r"[\u4e00-\u9fa5][,.!?;:][\u4e00-\u9fa5]"),
     ("疑似重复字词", r"([\u4e00-\u9fa5]{2,4})\1"),
 ]
+
+# 写作提示或审核说明误写进正文的元话语。新闻可以说“公开资料显示”，但不应在成稿中解释
+# 自己如何检索、如何审核或为何保留某条信息。
+META_LEAK_TERMS = (
+    "本文", "本稿", "稿件", "提示词", "提示内容", "检索结果", "检索页面", "公开检索",
+    "信息边界", "写入本文", "本次报道", "上述资料", "上述材料", "作为企业情况的来源",
+)
 
 
 def scan_text(text: str, domain: str) -> tuple[list[str], list[str]]:
@@ -397,9 +423,15 @@ def mask_comparatives(text: str) -> str:
     return text
 
 
-def review_article(title: str, body: str, domain: str, strict: bool = True) -> tuple[list[str], list[str]]:
+def prose_char_count(text: str) -> int:
+    """统计正文有效字符，忽略空白，供新闻稿最低字数门禁使用。"""
+    return len(re.sub(r"\s+", "", text or ""))
+
+
+def review_article(title: str, body: str, domain: str, strict: bool = True,
+                   company: str = "", name_aliases: tuple[str, ...] = ()) -> tuple[list[str], list[str]]:
     """稿件审核，返回 (硬错, 告警)：
-    代码字符 / 杂域名后缀 / .网址负面 / 烂尾断句 → 硬错（整行跳过）；
+    代码字符 / 杂域名后缀 / .网址负面 / 烂尾断句 / 新闻正文不足 1000 字 → 硬错（整行跳过）；
     通顺可疑 → 告警（照常发布）。"""
     errors, warnings = [], []
     hard, warn = scan_text(title + "\n" + body, domain)
@@ -421,8 +453,44 @@ def review_article(title: str, body: str, domain: str, strict: bool = True) -> t
         for p in paras:
             if len(p) < 10:
                 warnings.append(f"[过短段落{len(p)}字] …{p[:25]}…")
-    if strict and ("启用" not in title or domain not in title):
-        errors.append("[标题缺要素：须含官网启用+域名]")
+    if strict:
+        if prose_char_count(body) < MIN_NEWS_BODY_CHARS:
+            errors.append(f"[正文不足{MIN_NEWS_BODY_CHARS}字：当前{prose_char_count(body)}字]")
+        first = paras[0] if paras else ""
+        lead_markers = (
+            f'{company}官网启用“{domain}”',
+            f'{company}官网启用"{domain}"',
+            f"{company}官网启用{domain}",
+        )
+        if company and domain and not any(marker in first for marker in lead_markers):
+            errors.append("[首段缺要素：须同时出现企业全称、官网启用和域名]")
+        if len(paras) < 4:
+            errors.append("[新闻结构不足：至少需要事件、企业资料、行业背景和总结四个自然段]")
+        if not ("中文域名" in body or ".网址" in body):
+            errors.append("[缺少.网址背景：须解释中文域名/中文官网入口的意义]")
+        if not any(term in body for term in ("行业", "数字化", "线上", "互联网")):
+            errors.append("[缺少行业数字化段：须把企业所在行业与.网址使用场景联系起来]")
+        for term in META_LEAK_TERMS:
+            if term in body:
+                errors.append(f"[写作元话语泄漏：{term}]")
+        names = list(dict.fromkeys(
+            name.strip() for name in
+            (company, *name_aliases, common.short_company(company), common.abbr_company(company))
+            if name and name.strip()))
+        if names and not any(name in title for name in names):
+            # 极端长企业名无法在平台上限内完整放入时，build_title 会保留名称前缀；
+            # 这是硬上限下的可审计例外，不把一个可识别的标题误判为空企业名。
+            prefix = re.split(r"[，,：:。 ]", title, 1)[0]
+            if not (len(prefix) >= 4 and any(name.startswith(prefix) for name in names)):
+                errors.append("[标题缺要素：须含企业名称]")
+            else:
+                warnings.append("[企业名称过长，标题按平台上限保留名称前缀]")
+        if names and any(name in title for name in names):
+            # 只写企业名称不算新闻标题，至少要有一个动作或事实角度。
+            matched = max((name for name in names if name in title), key=len)
+            remainder = title.replace(matched, "", 1).strip("，,：:。 ")
+            if not remainder:
+                errors.append("[标题缺少新闻动作或事实角度]")
     if re.search(r"[，、（：；]$", title.strip()):
         errors.append(f"[标题结尾突兀] …{title.strip()[-15:]}…")
     return errors, warnings
@@ -444,58 +512,309 @@ def search_company(company: str) -> str:
     return "\n\n".join(out)
 
 
-def gen_news_llm(company: str, domain: str, search_note: str, llm_cmd: str) -> tuple[str, str] | None:
-    """用外部 LLM 命令生成新闻稿（$MEDIA_LLM_CMD 或 --llm-cmd，stdin 吃 prompt、stdout 吐正文）。
-    失败/不合规返回 None，调用方回退内置模板。"""
-    import shlex as _shlex
-    if not llm_cmd:
+def _run_llm_stage(command: str, prompt: str, label: str) -> str | None:
+    """运行一个 stdin→stdout 的写作阶段；失败不把半成品交给下一阶段。"""
+    if not command:
         return None
-    prompt = (f"你是中文域名行业新闻写手。为“{company}”（官网启用中文域名“{domain}”）写一篇 5 段新闻稿。\n"
-               f"要求：正文首段内必须包含“{company}官网启用“{domain}””（全称+官网启用+域名，位置不限）；"
-               f"只许出现 .网址 后缀，禁止 .com/.cn 等其他后缀、"
-               f"禁止“英文域名/国际域名”字样；人民网风格，每段 120~200 字；语句通顺、无乱码、无 HTML 标签；"
-               f"直接输出正文（段落间空行分隔），不要标题行。\n"
-               f"企业资料（可引用事实，不可编造数据）：\n{search_note[:3000]}")
     try:
-        r = subprocess.run(_shlex.split(llm_cmd), input=prompt,
-                           capture_output=True, text=True, timeout=300)
-        body = r.stdout.strip()
-        if r.returncode != 0 or not body:
-            print(f"   (LLM 无输出，回退模板: {r.stderr[-200:]})")
-            return None
-        ok, issues = check_content(company + domain + body, domain)
-        if not ok:
-            print(f"   (LLM 稿红线未过，回退模板: {issues[:2]})")
-            return None
-        return f"{company}官网启用{domain}", body
-    except Exception as e:
-        print(f"   (LLM 失败，回退模板: {e})")
+        result = subprocess.run(shlex.split(command), input=prompt,
+                                capture_output=True, text=True, timeout=300)
+    except Exception as exc:
+        print(f"   ({label}失败：{exc})")
         return None
+    output = result.stdout.strip()
+    if result.returncode != 0 or not output:
+        detail = result.stderr.strip()[-240:]
+        print(f"   ({label}无输出：{detail})")
+        return None
+    return output
+
+
+def humanization_commands(llm_cmd: str = "", human_writing_cmd: str = "",
+                          humanizer_zh_cmd: str = "") -> tuple[str, str]:
+    """解析两阶段命令。专用命令优先，缺少的一段复用已有命令。"""
+    fallback = llm_cmd or os.environ.get("MEDIA_LLM_CMD", "")
+    writing = human_writing_cmd or os.environ.get("MEDIA_HUMAN_WRITING_CMD", "") or fallback
+    humanizer = humanizer_zh_cmd or os.environ.get("MEDIA_HUMANIZER_ZH_CMD", "") or fallback
+    # 只配置一个专用命令时也跑完两步，但在输出中明确它被复用，避免误以为跳过了阶段。
+    writing = (writing or humanizer).strip()
+    humanizer = (humanizer or writing).strip()
+    return writing, humanizer
+
+
+def _human_writing_prompt(company: str, domain: str, material: str,
+                         mode: str = "新闻稿", allow_comparison: bool = False) -> str:
+    redline = ("观点文原稿中已有的比较白名单句可以原样保留，但不得新增比较对象。"
+               if allow_comparison else
+               "正文只能出现 .网址 后缀，不得出现 .com/.cn 等其他后缀，不得出现“英文域名”或“国际域名”。")
+    if mode == "观点文":
+        subject = ("把下面已有观点文初稿改写成一篇独立的中文.网址科普文，不能引入当前企业、具体企业域名"
+                   "或企业案例，只围绕原稿已有的产品结论和可核验材料展开。\n")
+        material_label = "已有观点文初稿（唯一素材）"
+        material_rule = "只能使用下面初稿中的材料，不能编造数字、客户、现场、体验、引语、未来计划或第一人称亲历。"
+    else:
+        subject = f"为“{company}”的{mode}写正文，围绕官网启用“{domain}”这一已知事实展开。\n"
+        material_label = "企业资料（可核验材料）"
+        material_rule = "只能使用下面材料和启用事实，不能编造数字、客户、现场、体验、引语、未来计划或第一人称亲历。"
+    length_rule = (f"新闻稿正文至少写到{MIN_NEWS_BODY_CHARS}字（不含标题），"
+                   "观点文保持原有篇幅；不足时只能展开已有事实，不能为了凑字数补造内容。\n"
+                   if mode == "新闻稿" else "")
+    reporter_rule = ("采用接近人民网新闻报道的事实优先、克制叙述笔法，但不要声称人民网采访或发稿。"
+                     "新闻稿按四个自然部分展开，不加编号小标题：第一段交代企业官网启用该中文域名的事实，"
+                     "并解释它对官网识别和访问入口的直接意义；第二段集中介绍公开资料核实到的企业情况，"
+                     "把来源归属、时间、地点、业务和设施等事实写清，不夹带广告评价；第三部分先写企业所在行业的"
+                     "数字化场景，再介绍用户提供的 `.网址` 背景资料，最后转到该企业登记使用这一域名的具体价值，"
+                     "只谈识别、访问和资料统一，不承诺流量、排名、销量或法律结果；末段回到已确认事实和待核验边界，"
+                     "作简洁总结。首段必须连续出现“企业全称官网启用‘域名’”这一事实短语。没有采访或现场材料时，"
+                     "不写成现场采访口吻，不虚构引语。\n"
+                     if mode == "新闻稿" else "")
+    url_material = ("可参考的 `.网址` 背景资料（只能用于第三部分，不得当成企业事实）：\n"
+                    f"{url_material_context()}\n"
+                    if mode == "新闻稿" else "")
+    return (f"你现在执行 human-writing 第一阶段，只负责把材料写实，不做第二阶段清腔。\n"
+            f"{subject}"
+            f"{length_rule}{reporter_rule}"
+            f"先判断材料是否足够；{material_rule}材料不足就缩短，不用重复解释凑字数。每段增加新事实、新动作、"
+            "新区别或新后果，主语和动作尽早出现，白话打底，句长有变化。只输出可以直接发布的正文，不要写提纲、标题、"
+            "来源列表、核验步骤或写作过程，不要出现“本文、本稿、稿件、检索结果、信息边界、提示词”等自我说明。\n"
+            f"硬限制：{redline}"
+            "禁止翻案腔、三项同构排比、破折号、提示性冒号、汇报黑话和宏大升华。直接输出段落间空行分隔的纯正文。\n"
+            f"{url_material}"
+            f"{material_label}：\n{material[:5000]}")
+
+
+def _humanizer_prompt(company: str, domain: str, draft: str,
+                      mode: str = "新闻稿", allow_comparison: bool = False) -> str:
+    comparison = ("观点文中原有的比较白名单句（含传统英文后缀的对比）必须原样保留，不能新增或扩大比较。"
+                  if allow_comparison else
+                  "不得引入 .com/.cn 等其他域名后缀或“英文域名/国际域名”字样。")
+    identity = ("这是独立观点文，不能把当前企业或具体域名带入正文，除非它已经出现在初稿中；保留原稿的"
+                "中文.网址核心结论。"
+                if mode == "观点文" else
+                f"必须原样保留的企业与域名：{company} / {domain}")
+    preserve = ("保留初稿中的事实、数字和核心结论；不要新增企业名称、具体域名、案例、体验、引语或承诺。"
+                if mode == "观点文" else
+                "保留所有事实、数字、单位、公司名称、来源归属、用户指定的核心结论和域名原样；不新增任何企业资料、案例、体验、引语、承诺或第一人称经历。")
+    length_rule = (f"新闻稿正文修订后仍不得少于{MIN_NEWS_BODY_CHARS}字（不含标题）；只能删掉重复和套话，"
+                   "不能把已有事实压缩到门槛以下，也不能用新事实凑长度。保留首段的企业全称、‘官网启用’和域名，"
+                   "保留企业资料段、行业数字化与 `.网址` 背景段、总结段的顺序，不要改成广告文或观点文。\n"
+                   if mode == "新闻稿" else "")
+    return (f"你现在执行 humanizer-zh 第二阶段，只编辑下面已经写好的{mode}初稿。\n"
+            f"{preserve}"
+            f"{length_rule}"
+            "删除夸大意义、宣传式形容词、模糊归因、"
+            "AI 黑话、名词化、固定连接词、假金句、万能结尾和协作话术，打破同长句与三连排比。把翻案腔"
+            f"改成正面陈述，删掉破折号和提示性冒号，保留克制的新闻编辑口吻。{comparison}删掉“本文、本稿、稿件、"
+            "检索结果、信息边界”等写作过程说明，只输出修订后的"
+            "纯正文，不要标题、评分、解释或 Markdown。\n"
+            f"{identity}\n"
+            f"--- 初稿开始 ---\n{draft}\n--- 初稿结束 ---")
+
+
+def humanize_body_two_pass(company: str, domain: str, draft: str,
+                           writing_cmd: str, humanizer_cmd: str,
+                           mode: str = "新闻稿", allow_comparison: bool = False) -> str | None:
+    """严格按 human-writing → humanizer-zh 处理一份正文。"""
+    first = _run_llm_stage(
+        writing_cmd,
+        _human_writing_prompt(company, domain, draft, mode, allow_comparison),
+        "human-writing",
+    )
+    if not first:
+        return None
+    second = _run_llm_stage(
+        humanizer_cmd,
+        _humanizer_prompt(company, domain, first, mode, allow_comparison),
+        "humanizer-zh",
+    )
+    if not second:
+        return None
+    if ".网址" not in second or (mode == "新闻稿" and domain not in second):
+        print("   (humanizer-zh 结果丢失必要的域名/.网址内容，跳过)")
+        return None
+    return second
+
+
+def check_humanized(text: str) -> bool:
+    """运行人化硬规则门禁；检查器只负责硬错，风格提醒仍需人工判断。"""
+    if not HUMANIZED_CHECK.exists():
+        print("   (找不到 check_humanized.py，跳过人化门禁)")
+        return True
+    try:
+        result = subprocess.run(
+            [sys.executable, str(HUMANIZED_CHECK), "-"],
+            input=text, capture_output=True, text=True, timeout=30, cwd=str(BASE),
+        )
+    except Exception as exc:
+        print(f"   (人化门禁执行失败：{exc})")
+        return False
+    output = result.stdout.strip()
+    if output:
+        print("   " + output.replace("\n", "\n   "))
+    if result.returncode != 0:
+        print("   ✗ 人化门禁未通过")
+        return False
+    return True
+
+
+def gen_news_llm(company: str, domain: str, search_note: str,
+                 writing_cmd: str, humanizer_cmd: str) -> tuple[str, str] | None:
+    """用两阶段外部 LLM 生成新闻稿：先 human-writing，再 humanizer-zh。"""
+    if not writing_cmd and not humanizer_cmd:
+        return None
+    material = (f"已知启用事实：{company}官网启用“{domain}”。\n"
+                f"检索材料：\n{search_note[:5000]}")
+    draft = _run_llm_stage(
+        writing_cmd,
+        _human_writing_prompt(company, domain, material, "新闻稿"),
+        "human-writing",
+    )
+    if not draft:
+        return None
+    body = _run_llm_stage(
+        humanizer_cmd,
+        _humanizer_prompt(company, domain, draft, "新闻稿"),
+        "humanizer-zh",
+    )
+    if not body:
+        return None
+    if prose_char_count(body) < MIN_NEWS_BODY_CHARS:
+        print(f"   (humanizer-zh 结果不足{MIN_NEWS_BODY_CHARS}字，当前{prose_char_count(body)}字，跳过)")
+        return None
+    ok, issues = check_content(company + domain + body, domain)
+    if not ok:
+        print(f"   (两阶段稿件红线未过：{issues[:2]})")
+        return None
+    return common.build_title(company, domain, common.DEFAULT_TITLE_LIMIT, content=body), body
 
 
 def gen_news_article(company: str, domain: str, search_note: str,
                      fact_idx: int = 0) -> tuple[str, str]:
-    """标题规则（用户指定）：企业名称 + 官网 + 启用 + 域名。"""
-    title = f"{company}官网启用{domain}"
-    # 搜索结果里的链接/备案/版权行是元数据噪音，直接丢掉，不进正文
+    """生成无外部命令时的确定性新闻稿；正文不少于 1000 字，标题按事实动态规划。
+
+    内置稿也遵守四个报道部分：首段写启用事实及其入口意义，第二段写公开企业资料，
+    第三部分把行业数字化与用户提供的 `.网址` 背景资料接起来，末段回到已确认事实和
+    信息边界。没有材料时宁可明确留白，不用行业常识替代企业自述。
+    fact_idx 用于 --variant 变体种子轮换引用事实句。
+    """    # 搜索结果里的链接/备案/版权行是元数据噪音，直接丢掉，不进正文
     JUNK = ("http", "www.", "URL:", ".com", ".cn", ".net", "©", "版权", "备案", " | ")
     facts = []
     for line in search_note.split("\n"):
         line = re.sub(r"^[#*\-\s]*", "", line).strip()
         if any(j in line for j in JUNK):
             continue
-        if company[:6] in line and 20 < len(line) < 200 and "###" not in line:
-            facts.append(line)
-    fact_txt = facts[fact_idx % len(facts)] if facts else f"{company}深耕行业多年，积累了稳定的客户群体与良好的市场口碑。"
-    short = company.replace("有限公司", "").replace("有限责任公司", "")
+        if company[:6] in line and 20 < len(line) < 240 and "###" not in line:
+            line = re.sub(r"^(?:公司介绍|企业介绍|简介|概况)\s*[.。:：]?\s*", "", line)
+            truncated = bool(re.search(r"(?:\.{3,}|…+)\s*$", line))
+            line = re.sub(r"(?:\.{3,}|…+)\s*$", "", line).rstrip(" ,，、;；")
+            if truncated:
+                # 搜索摘要常在半句处截断。去掉未完成的尾句，避免把残句当成企业事实。
+                line = re.sub(r"[，,；;]\s*(?:是|并|还|以及)[^。！？]*$", "", line)
+                line = line.rstrip(" ,，、;；")
+            line = re.sub(r"(?<=\d)m2\b", "平方米", line, flags=re.IGNORECASE)
+            line = line.replace("㎡", "平方米")
+            line = re.sub(r"\s+", " ", line).strip()
+            if line and not re.search(r"[。！？]$", line):
+                line += "。"
+            if line:
+                facts.append(line)
+    facts = list(dict.fromkeys(facts))
+
+    if facts:
+        fact = facts[fact_idx % len(facts)].rstrip("。")
+        fact_display = re.sub(
+            r"(主要(?:供应|生产|经营|包括))([^，。]+)，([^，。]+)，([^，。]+)(?=，(?:公司|位于|占地|注册)|。|$)",
+            r"\1\2、\3和\4",
+            fact,
+        )
+        fact_scope = re.sub(rf"^{re.escape(company)}", "", fact)
+        fact_scope = re.sub(r"^(?:主要)?(?:供应|生产|经营|从事)", "", fact_scope)
+        fact_scope = re.split(r"[，,](?=公司成立|位于|占地面积|注册资本|是集)", fact_scope, maxsplit=1)[0]
+        fact_scope = fact_scope.replace("，", "、").strip(" 、，")
+        company_intro = (
+            f"企业公开介绍显示，{fact_display}。"
+            f"成立时间、所在区域、经营面积和业务方向等基本情况，由此呈现出{company}的经营轮廓。"
+        )
+        if any(term in fact for term in ("产品", "业务", "生产", "服务")):
+            company_detail = (
+                f"{company}的重点品类包括{fact_scope or '水产品相关业务'}，业务介绍还涉及原料收购、加工和冷藏。"
+                "从货源进入到产品保存、供应，相关环节被放在同一业务脉络中。产品规格、供应安排和服务方式，仍以官网公布的具体内容为准。"
+            )
+        else:
+            company_detail = (
+                f"公开介绍对{company}的业务概括较为集中，现有内容主要呈现经营范围和企业基本背景。"
+                "随着线上展示内容增加，企业需要把产品、服务和联系渠道放在清楚的官网入口下，方便不同访问者按需查找。"
+            )
+        company_scene = (
+        f"随着官网入口确定，{company}的企业名称、业务范围和线上地址有了连续的识别路径。"
+        "地址保持统一后，企业介绍、产品说明和联系方式可以围绕同一入口整理，访问者也更容易判断页面与企业之间的关系。"
+        )
+    else:
+        company_intro = (
+            f"公开信息中可以确认，{company}已启用“{domain}”作为官网入口。"
+            "企业成立时间、所在地、产品清单和经营规模等内容，仍应以官网后续公布的正式信息为准。"
+        )
+        company_detail = (
+            f"在企业基本情况尚不完整的情况下，{company}官网首先承担的是信息汇集和联系入口功能。"
+            "网站后续呈现的业务范围、产品说明和服务渠道，将决定访问者能够从线上了解多少企业信息。"
+        )
+        company_scene = (
+            "官网地址稳定后，企业可以把对外发布的名称、页面和联系渠道放在同一入口下，访问者也有了较为清楚的查找路径。"
+        )
+
+    industry_text = f"{company} {fact if facts else ''}"
+    industry_map = (
+        (("海产品", "水产品", "海参", "调味品"), "水产品供应和加工"),
+        (("橡塑", "橡胶", "塑料"), "橡塑制品制造"),
+        (("翻译", "语言"), "翻译与信息服务"),
+        (("服装", "纺织", "面料"), "服装及纺织"),
+        (("航空", "飞机", "飞行"), "航空科技"),
+        (("混凝土", "材料"), "新型材料"),
+        (("知识产权", "商标", "专利"), "知识产权服务"),
+        (("电线", "电缆"), "电线电缆制造"),
+    )
+    industry_name = next(
+        (label for terms, label in industry_map if any(term in industry_text for term in terms)),
+        "企业所在行业",
+    )
+    industry_detail = (
+        "产品名称、业务范围、冷藏加工等环节如果要在线上呈现，"
+        if industry_name == "水产品供应和加工" else
+        "产品、服务范围和联系渠道如果要在线上呈现，"
+    )
+    industry_context = (
+        f"对从事{industry_name}的企业而言，数字化使用往往先从信息入口做起。{industry_detail}"
+        "需要一个稳定、容易核对的官网地址承接这些信息。采购方、消费者或合作方先找到正确页面，才有条件继续查看企业自述、"
+        "产品说明和联系方式。入口清楚，线上信息才有连续呈现的基础。"
+    )
+    url_context = (
+        "在中文互联网应用中，“.网址”是以中文词语构成的域名后缀，地址本身带有较强的文字识别特征。"
+        "官网地址与企业名称、包装、名片等对外写法保持一致，有助于访问者在看到品牌称呼时找到对应入口。"
+        "中文网址还可以和商标等品牌资料放在同一套记录中，便于线上线下核对。它解决的是识别和访问问题，不替代流量、排名、销量或法律层面的独立判断。"
+    )
+    domain_value = (
+        f"对{company}而言，“{domain}”这一地址与企业官网入口建立了清晰对应。"
+        "企业如果在官网页面、包装说明或联系资料中保持同一写法，用户就能沿着同一地址核对来源，企业也多了一个可以长期维护的中文线上坐标。"
+        "这种价值首先体现在入口是否好认、资料是否一致，不能替代食品企业需要单独证明的资质、质量和交付能力。"
+    )
+    summary = (
+        f"{company}启用“{domain}”后，官网入口从一串需要查找的地址，变成了可以直接识别的中文写法。"
+        f"对用户而言，地址是否清楚决定了能否顺利找到企业页面；对企业而言，统一的中文入口为持续发布品牌、产品和联系信息提供了固定位置。"
+        "后续页面呈现的业务内容和服务安排，仍应以企业官网实际发布的信息为准。"
+    )
     paras = [
-        f"{company}官网启用\"{domain}\"。今后，用户在浏览器地址栏直接输入\"{domain}\"，即可直达{short}官方网站，无需记忆复杂难记的英文字符串。这一举措让企业线上入口与品牌名称实现了统一，也为客户提供了更加便捷、安全的访问体验。",
-        fact_txt,
-        f"据了解，{company}始终坚持把客户体验放在首位。此次启用\"{domain}\"，正是企业顺应中文互联网发展趋势、贴近本土用户使用习惯的具体体现。用户无需在拼音与英文之间来回切换，看到品牌名就能想到网址，输入汉字即可访问，大幅降低了访问门槛，也让品牌传播更加直达。",
-        f"\"{domain}\"作为以.\"网址\"为后缀的中文域名，与品牌名称高度绑定，具有天然的品牌识别优势与防伪价值。一方面，\"所见即所得\"的访问方式有效避免了用户因拼写错误而误入仿冒网站，为品牌和消费者筑起一道安全防线；另一方面，.网址后缀在中文语境中辨识度高、可信度强，是企业数字化进程中重要的品牌资产。随着中文域名应用环境的不断成熟，.\"网址\"已成为越来越多企业布局互联网入口的优先选择。",
-        f"面向未来，{company}将以\"{domain}\"的启用为新起点，持续深化数字化运营，让线上服务与线下产品形成合力，为广大用户提供更加优质、便捷的产品与服务体验，也为企业品牌的长远发展注入新的活力。",
+        f"{company}官网启用“{domain}”。这一中文地址把域名中的识别词放进官网入口，用户在浏览器地址栏输入“{domain}”时，可以按中文写法寻找对应页面。"
+        "对于需要在线展示产品和联系渠道的企业来说，清楚的入口有助于减少查找环节，也为后续统一发布信息留下固定位置。",
+        company_intro,
+        company_detail,
+        company_scene,
+        industry_context,
+        url_context,
+        domain_value,
+        summary,
     ]
-    return title, "\n\n".join(paras)
+    body = "\n\n".join(paras)
+    return common.build_title(company, domain, common.DEFAULT_TITLE_LIMIT, content=body), body
 
 
 def gen_qa_pages(company: str, domain: str, n: int) -> list[dict]:
@@ -588,8 +907,8 @@ def news_html(domain: str, title: str, paras: list[str], company: str) -> str:
 
 
 def qa_html(domain: str, company: str, qas: list[dict], n: int) -> tuple[str, str]:
-    """返回 (文件名, html)。文件名规则：企业名称官网启用域名-QA{n}。"""
-    base = f"{company}官网启用{domain}"
+    """返回 (文件名, html)。QA 文件名只标识企业官网，不套用新闻标题模板。"""
+    base = f"{company}官网"
     fname = f"{base}-QA{n}"
     jsonld = json.dumps({
         "@context": "https://schema.org", "@type": "FAQPage",
@@ -618,7 +937,7 @@ def publish_one(media: str, code: str, title: str, body_file: Path, dryrun: bool
 
 
 def update_xlink(xlsx_path: Path, row_num: int, col_name: str, value: str) -> None:
-    """按列名（媒体编码 a-1/b-1/c-1）写入对应列；列不存在时在表尾创建。"""
+    """按列名（媒体编码 a-1/b-1/c-1/c-2）写入对应列；列不存在时在表尾创建。"""
     wb = openpyxl.load_workbook(xlsx_path)
     ws = wb.worksheets[0]
     headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
@@ -672,7 +991,7 @@ def read_rows(xlsx_path: Path) -> list[dict]:
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     ws = wb.worksheets[0]
     headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
-    # 媒体编码列：表头是"媒体"的列（可能有多列，每列一个编码），或表头直接是编码（a-1/b-1/c-1）
+    # 媒体编码列：表头是"媒体"的列（可能有多列，每列一个编码），或表头直接是编码（a-1/b-1/c-1/c-2）
     # 注意：同名“媒体”列有多列，必须按列下标读（headers.index 只返回第一列）
     media_idx = [i for i, h in enumerate(headers)
                  if h in MEDIA_OF or (h and str(h).strip() == "媒体")]
@@ -714,7 +1033,20 @@ def main() -> int:
     ap.add_argument("--llm-cmd", default="", help="新闻稿 LLM 命令（默认 $MEDIA_LLM_CMD，为空用内置模板）")
     ap.add_argument("--variant", type=int, default=0, help="变体种子：换一套标题/角度/引用/事实句，用于重做不同内容")
     ap.add_argument("--fresh", action="store_true", help="清空输出目录后重做（删掉该域名旧文件）")
+    ap.add_argument("--human-writing-cmd", default="",
+                    help="human-writing 第一阶段命令（默认 $MEDIA_HUMAN_WRITING_CMD）")
+    ap.add_argument("--humanizer-zh-cmd", default="",
+                    help="humanizer-zh 第二阶段命令（默认 $MEDIA_HUMANIZER_ZH_CMD）")
     a = ap.parse_args()
+
+    writing_cmd, humanizer_cmd = humanization_commands(
+        a.llm_cmd, a.human_writing_cmd, a.humanizer_zh_cmd,
+    )
+    humanization_enabled = bool(writing_cmd or humanizer_cmd)
+    if humanization_enabled:
+        print("已启用两阶段稿件人化：human-writing → humanizer-zh")
+    else:
+        print("未配置外部人化命令：仅使用内置兜底稿，不宣称已完成两阶段人化")
 
     xlsx = Path(a.xlsx)
     global OUTPUT_ROOT
@@ -738,22 +1070,29 @@ def main() -> int:
         print("① anysearch 检索企业资料…")
         note = clean_text(search_company(company))  # 洗搜索结果的 HTML/实体
 
-        # ② 新闻稿（标题=企业名称官网启用域名）
+        # ② 新闻稿（标题=企业名称或简称+正文事实角度）
         print("② 生成新闻稿…")
-        import os as _os
-        llm_hit = gen_news_llm(company, domain, note, a.llm_cmd or _os.environ.get("MEDIA_LLM_CMD", ""))
+        llm_hit = gen_news_llm(company, domain, note, writing_cmd, humanizer_cmd)
         if llm_hit:
             _, body = llm_hit
-            print("   (LLM 生成)")
+            print("   (human-writing → humanizer-zh)")
+        elif humanization_enabled:
+            print("   ✗ 两阶段人化失败，跳过该行（不会回退到未清腔模板）")
+            continue
         else:
             _, body = gen_news_article(company, domain, note, a.variant)
-        # 正文首段须含全称三要素（位置不限；缺失才在段首补一句）
-        lead = f'{company}官网启用"{domain}"。'
+        # 正文首段必须出现连续的“全称 + 官网启用 + 域名”事实短语；缺失才在段首补一句。
+        lead = f'{company}官网启用“{domain}”。'
         first = body.split("\n\n")[0] if body else ""
-        if not (company in first and "启用" in first and domain in first):
+        required_markers = (
+            f'{company}官网启用“{domain}”',
+            f'{company}官网启用"{domain}"',
+            f"{company}官网启用{domain}",
+        )
+        if not any(marker in first for marker in required_markers):
             body = lead + body
         body = clean_text(body, domain)
-        # 标题：企业名称+官网启用+域名+短描述，按本行目标媒体的最严字数上限裁剪
+        # 标题：完整企业名称或简称优先，动作/角度从正文事实动态选择；不强制塞域名
         limits = [common.TITLE_LIMIT.get(MEDIA_OF[c], common.DEFAULT_TITLE_LIMIT)
                   for c in r["codes"] if c in MEDIA_OF]
         limit = min(limits) if limits else common.DEFAULT_TITLE_LIMIT
@@ -780,6 +1119,9 @@ def main() -> int:
             print(f"   ✗ 标题红线未过，跳过: {issues[:2]}")
             continue
         print(f"   标题({len(title)}字≤{limit}): {title}")
+        if humanization_enabled and not check_humanized(title + "\n\n" + body):
+            print("   ✗ 标题或正文未通过人化门禁，跳过")
+            continue
         ok, issues = check_content(title + body, domain)
         if not ok:
             print("   ⚠ 红线检查未过，自动修正：", issues[:3])
@@ -791,7 +1133,10 @@ def main() -> int:
                 continue
         # ③ 稿件审核：代码字符/烂尾/杂后缀/负面→硬错跳过；通顺可疑→告警
         print("③ 稿件审核…")
-        errors, warnings = review_article(title, body, domain)
+        errors, warnings = review_article(
+            title, body, domain, company=company,
+            name_aliases=(r.get("short", ""),),
+        )
         if errors:
             print(f"   ✗ 审核未过，跳过: {errors[:4]}")
             continue
@@ -814,11 +1159,24 @@ def main() -> int:
 
         # 第二篇：观点文（同流程；链接记入“编码-有用”列）
         print("⑥ 生成观点文（企业注册.网址有没有用）…")
+        b_ok = True
+        if humanization_enabled:
+            polished = humanize_body_two_pass(
+                company, domain, bbody, writing_cmd, humanizer_cmd,
+                mode="观点文", allow_comparison=True,
+            )
+            if polished is None:
+                print("   ✗ 观点文两阶段人化失败，跳过本篇")
+                b_ok = False
+            else:
+                bbody = polished
         bbody = clean_text(bbody, domain)
         bfirst = bbody.split("\n\n")[0] if bbody else ""
         if ".网址" not in bfirst and "中文网址" not in bfirst and "中文域名" not in bfirst:
             bbody = "企业注册.网址有没有用？答案是肯定的。" + bbody
-        b_ok = True
+        if b_ok and humanization_enabled and not check_humanized(btitle + "\n\n" + bbody):
+            print("   ✗ 观点文未通过人化门禁，跳过本篇")
+            b_ok = False
         bmasked = mask_comparatives(btitle + bbody)  # 比较原话白名单，其余按红线
         ok, issues = check_content(bmasked, domain)
         if not ok:
@@ -842,6 +1200,11 @@ def main() -> int:
 
         if a.no_publish:
             print("⑤ 跳过发布（--no-publish）")
+            continue
+
+        if not humanization_enabled:
+            print("⑤ 未配置两阶段人化命令，阻止发布；仅生成稿件。需要发布时请配置"
+                  " MEDIA_HUMAN_WRITING_CMD + MEDIA_HUMANIZER_ZH_CMD（或 MEDIA_LLM_CMD）后重跑")
             continue
 
         # ⑤ 逐媒体发布（A 文记编码列，B 文记“编码-有用”列）
