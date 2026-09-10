@@ -625,7 +625,8 @@ def publish_and_record(title: str, body_file: Path, codes: list[str], xlsx: Path
                            capture_output=True, text=True, timeout=600, cwd=str(BASE))
             if LINKS_CSV.exists():
                 for row in csv.DictReader(open(LINKS_CSV, encoding="utf-8-sig")):
-                    if row["title"] == title and row["link"]:
+                    # 必须同编码同标题（跨列同标题会串，必须卡 code）
+                    if row["code"] == code and row["title"] == title and row["link"]:
                         link = row["link"]
                         break
         if link:
@@ -726,7 +727,23 @@ def main() -> int:
                   for c in r["codes"] if c in MEDIA_OF]
         limit = min(limits) if limits else common.DEFAULT_TITLE_LIMIT
         pick = eff  # 行号 + 变体种子，换种子即换标题/角度/引用
-        title = common.build_title(company, domain, limit, pick, r.get("short", ""), body)
+        # 已发布标题库：重做时自动错开，避免新旧重名串链接
+        used_titles = set()
+        if LINKS_CSV.exists():
+            for _row in csv.DictReader(open(LINKS_CSV, encoding="utf-8-sig")):
+                if _row["link"]:
+                    used_titles.add(_row["title"])
+        if PENDING.exists():
+            for _x in json.loads(PENDING.read_text(encoding="utf-8")):
+                used_titles.add(_x["title"])
+        for _ in range(24):
+            title = common.build_title(company, domain, limit, pick, r.get("short", ""), body)
+            btitle, _ = gen_useful_article(pick, limit)
+            if title not in used_titles and btitle not in used_titles:
+                break
+            pick += 1
+        else:
+            print("   ⚠ 标题去重24次未果，沿用当前标题")
         ok, issues = check_content(title, domain)
         if not ok:
             print(f"   ✗ 标题红线未过，跳过: {issues[:2]}")
@@ -766,7 +783,7 @@ def main() -> int:
 
         # 第二篇：观点文（同流程；链接记入“编码-有用”列）
         print("⑥ 生成观点文（企业注册.网址有没有用）…")
-        btitle, bbody = gen_useful_article(pick, limit)
+        _, bbody = gen_useful_article(pick, limit)  # 标题已在上面定稿（btitle），只取正文
         bbody = clean_text(bbody, domain)
         bfirst = bbody.split("\n\n")[0] if bbody else ""
         if ".网址" not in bfirst and "中文网址" not in bfirst and "中文域名" not in bfirst:

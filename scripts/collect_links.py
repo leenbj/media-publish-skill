@@ -33,12 +33,9 @@ def check_toutiao(pg, item: dict) -> dict:
     pg.goto("https://mp.toutiao.com/profile_v4/graphic/articles")
     pg.wait_for_timeout(6000)
     r = pg.evaluate("""((title) => {
-      // 标题行 a：文本完全匹配或前缀匹配
+      // 标题行 a：必须完全匹配（同公司重发标题前缀相同，前缀匹配会串行）
       const a = [...document.querySelectorAll('a')]
-        .find(a => {
-          const t = (a.textContent || '').trim()
-          return t === title || (title.length > 10 && t && title.startsWith(t))
-        })
+        .find(a => (a.textContent || '').trim() === title)
       if (!a) return {found: false}
       // 状态从 .content-list-main 级容器抓（避免匹配到筛选 tab 文本）
       let row = a
@@ -51,7 +48,9 @@ def check_toutiao(pg, item: dict) -> dict:
       return {found: true, status: statusM[0] || '', href: a.href}
     })""", item["title"])
     if r["found"]:
-        link = r["href"] if r["status"] == "已发布" else ""
+        href = r["href"] or ""
+        # 只要正式文章链接；预览链接（未过审）不算，写占位下轮再查
+        link = href if (r["status"] == "已发布" and ("/item/" in href or "/article/" in href)) else ""
         return {"status": r["status"], "link": link}
     # 后台列表没找到 → 查前台主页是否真实在线（含搜索关键词前8字）
     key = item["title"][:8]
@@ -63,7 +62,8 @@ def check_toutiao(pg, item: dict) -> dict:
       return a ? {found: true, href: a.href} : {found: false}
     })""", key)
     if online["found"]:
-        return {"status": "已发布（前台在线）", "link": online["href"]}
+        # 前台有但后台无：只报状态不给链接（同公司多版本标题相近，链接易串），留待下轮
+        return {"status": "前台在线（后台无记录）", "link": ""}
     return {"status": "未找到（可能被平台拦截或审核超时）", "link": ""}
 
 
@@ -79,9 +79,9 @@ def check_sohu(pg, item: dict) -> dict:
     r = pg.evaluate("""((title) => {
       const norm = s => (s || '').replace(/\\s+/g, '')
       const target = norm(title)
+      // 必须全等匹配（同公司标题前12字相同，模糊匹配会串行）
       const a = [...document.querySelectorAll('a')]
-        .find(x => norm(x.textContent) === target ||
-                   (x.href || '').includes('www.sohu.com/a/') && norm(x.textContent).includes(target.slice(0, 12)))
+        .find(x => norm(x.textContent) === target)
       if (!a) return {found: false, matched: false}
       let row = a
       for (let i = 0; i < 8 && row; i++) {
@@ -205,16 +205,15 @@ def main() -> int:
                     still_pending.append(item)
         browser.close()
 
-    # 写 csv（合并旧记录）
+    # 写 csv（合并旧记录；同编码同标题以最新为准，重发覆盖旧链接）
     all_rows = list(existing.values()) + new_rows
-    seen = set()
-    dedup = []
+    merged = {}
     for row in all_rows:
         key = (row["code"], row["title"])
-        if key in seen:
-            continue
-        seen.add(key)
-        dedup.append(row)
+        if key in merged:
+            del merged[key]
+        merged[key] = row
+    dedup = list(merged.values())
     with open(LINKS_CSV, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=["code", "media", "account", "title", "status",
                                           "link", "published_at", "collected_at"])
