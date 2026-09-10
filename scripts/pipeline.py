@@ -191,7 +191,7 @@ USEFUL_CITES = [
 # B 文与企业案例脱钩：纯科普产品文，中性口吻，只谈.网址本身。
 # 6 角度 × 2 变体（标题/开头/结尾各不相同，核心一致），12 连不重样。
 USEFUL_ANGLES = [
-    {"titles": ["企业注册中文.网址有没有用？先看兼容性", "中文.网址能不能正常用？实测结论"],
+    {"titles": ["企业注册中文.网址有没有用？先看兼容性", "中文.网址能不能正常用？实测结论", "中文.网址注册使用全指南"],
      "openings": [
         "近年常有企业问：注册中文网址到底有没有用？先说最实际的一条：今天所有的主流浏览器均已支持中文域名，输入汉字即可直达，不需要任何插件。",
         "中文网址能不能像常用网址一样打开网页？答案是肯定的。目前主流浏览器对中文域名的支持已经完备，从输入、解析到访问全链路畅通。今天所有的主流浏览器均已支持中文域名。",
@@ -206,7 +206,7 @@ USEFUL_ANGLES = [
         "结论很直接：兼容性不再是问题，剩下的只是企业愿不愿意把品牌门牌换成中文。",
         "对企业而言，问题已从能不能用变成要不要早点注册，而注册遵循先申请先注册的原则。",
      ]},
-    {"titles": ["AI时代，企业为何更需要中文.网址", "当AI开始理解品牌：中文.网址的优势"],
+    {"titles": ["AI时代，企业为何更需要中文.网址", "当AI开始理解品牌：中文.网址的优势", "AI入口为什么偏爱中文.网址"],
      "openings": [
         "以中文理解为核心的AI平台普及之后，一个变化正在发生：用户用中文提问，AI直接给出品牌官网，中间不再需要翻译和拼写。",
         "过去用户要先把品牌译成英文、拼对网址才能访问。今天在AI入口，一句中文就能直达，中文网址因此获得了新的价值。",
@@ -221,7 +221,7 @@ USEFUL_ANGLES = [
         "对中文品牌企业而言，这是成本最低的一次入口升级。",
         "AI入口的竞争已经开始，中文网址是中文品牌的天然主场。",
      ]},
-    {"titles": ["商标注册了，中文.网址还要注册吗", "品牌保护：中文.网址为什么是必选项"],
+    {"titles": ["商标注册了，中文.网址还要注册吗", "品牌保护：中文.网址为什么是必选项", "中文.网址：品牌保护缺失的一环"],
      "openings": [
         "很多企业以为注册了商标就万事大吉。实际情况是：商标管商标，网址管网址，品牌名对应的中文网址一旦被他人注册，企业只能被动应对。",
         "商标和中文网址是两套权利体系。只守住商标，等于只锁了一道门，品牌在网上的入口仍可能旁落他人，早一天补上，早一天安心。"
@@ -236,7 +236,7 @@ USEFUL_ANGLES = [
         "与其事后花大成本维权，不如事先把该注册的中文网址注册到位，主动权始终在自己手里。",
         "品牌保护清单上，中文网址应该和商标写在同一行，同等投入，同等重视。",
      ]},
-    {"titles": ["中文.网址能当官网主域名吗", "把中文.网址放在官网地址栏，可行吗"],
+    {"titles": ["中文.网址能当官网主域名吗", "把中文.网址放在官网地址栏，可行吗", "官网主域名换成中文.网址"],
      "openings": [
         "官网地址栏能不能放中文？先给结论：完全可行。今天所有的主流浏览器均已支持中文域名，输入汉字直达已是成熟体验。",
         "过去企业把中文网址当跳转备用，担心兼容和观感。现在这两层顾虑都不存在了，它可以直接放在地址栏作主域名。今天所有的主流浏览器均已支持中文域名。",
@@ -251,7 +251,7 @@ USEFUL_ANGLES = [
         "地址栏里的中文，就是品牌最短的路，也是用户最省心的一次输入。",
         "主域名的选择标准只有一个：用户好不好到达。中文网址符合这条标准，也经得起全场景检验。"
      ]},
-    {"titles": ["中文.网址证书能当商标证据吗", "商标撤三抗辩中，中文.网址起了什么作用"],
+    {"titles": ["中文.网址证书能当商标证据吗", "商标撤三抗辩中，中文.网址起了什么作用", "中文.网址证书有什么用"],
      "openings": [
         "商标连续三年无使用证据可能被撤销，这种程序叫撤三。而网址证书，正在成为撤三抗辩中的关键证据。",
         "很多企业不知道：官网本身就是商标使用的载体，而网址作为官网的门牌号，是证明真实、连续、公开使用的重要材料之一。",
@@ -266,7 +266,23 @@ USEFUL_ANGLES = [
         "证据要平时攒：现在注册并使用，关键时刻才拿得出来。",
         "把网址证书放进知识产权档案，是成本最低的未雨绸缪。",
      ]},
-    {"titles": ["好听的中文.网址会被抢注吗", "企业注册中文.网址，晚了会怎样"],
+    {"titles": ["企业注册中文.网址贵吗", "中文.网址的注册与维权成本", "中文.网址注册要花多少钱"],
+     "openings": [
+        "注册一个中文网址要花多少钱？先说结论：相比品牌维权动辄数万的成本，提前注册的费用只是零头。",
+        "很多企业把中文网址一拖再拖，觉得不急。算一笔账就清楚：注册费是小钱，被抢注后的维权、回购或诉讼才是大钱。",
+     ],
+     "core": [
+        "中文网址遵循先申请先注册的原则，不做在先权利审查，且全球唯一。品牌对应的中文网址谁先申请归谁，先注册即先确权。",
+        "今天所有的主流浏览器均已支持中文域名，应用场景全支持，已经与英文域名.com、.cn没有任何区别，AI平台表现更优，注册下来即可投入使用，包括用作官网主域名。",
+        "特别是AI平台的支持效果远超英文域名，所以更建议企业优先使用。中文域名的注册与保护，已不再是可选项，而是为了包含企业品牌的必选项。{c1}。",
+        "{c2}。",
+        "用户习惯已经完全普及，中文域名的网站越来越多，国内网民很快适应，中文网址适用于官网、邮箱、包装、广告等全场景。",
+     ],
+     "endings": [
+        "注册费是确定的小成本，被抢注的损失是不确定的大成本，这笔账不难算。",
+        "花小钱确权，还是花大钱维权，企业自己选。",
+     ]},
+    {"titles": ["好听的中文.网址会被抢注吗", "企业注册中文.网址，晚了会怎样", "中文.网址先到先得是真的吗"],
      "openings": [
         "中文网址遵循先申请先注册，不做在先权利审查。含义很直白：品牌对应的中文网址，谁先申请归谁。",
         "品牌名一旦走红，相关的中文网址往往最先被盯上。等企业想起来注册时，好名字可能已经不在了。",
@@ -317,16 +333,31 @@ NEW_POINTS = [
 ]
 
 
-def gen_useful_article(pick: int, limit: int) -> tuple[str, str]:
-    """科普观点文：6 角度 × 2 变体，标题开头结尾各不相同，核心一致。
-    变体序号随行号进位，12 连不重样；标题全部按字数上限设计。"""
-    a = USEFUL_ANGLES[pick % len(USEFUL_ANGLES)]
-    v = (pick // len(USEFUL_ANGLES)) % 2
+def b_free_combos(used_titles: set) -> list[tuple[int, int]]:
+    """B 文空位池：已用标题占的（角度,变体）剔除，返回空位；占满则返回全部。"""
+    rev: dict[str, list[tuple[int, int]]] = {}
+    for ai, a in enumerate(USEFUL_ANGLES):
+        for vi, t in enumerate(a["titles"]):
+            rev.setdefault(t, []).append((ai, vi))
+    used = set()
+    for t in used_titles:
+        used.update(rev.get(t, []))
+    allc = [(ai, vi) for ai, a in enumerate(USEFUL_ANGLES) for vi in range(len(a["titles"]))]
+    free = [c for c in allc if c not in used]
+    return free or allc
+
+
+def gen_useful_article(pick: int, limit: int, used_titles=()) -> tuple[str, str]:
+    """科普观点文：空位池取模选（角度,变体），行间不收敛、不重名；标题卡字数。"""
+    free = b_free_combos(set(used_titles))
+    ai, vi = free[pick % len(free)]
+    a = USEFUL_ANGLES[ai]
+    v = vi
     c1 = USEFUL_CITES[pick % len(USEFUL_CITES)]
     c2 = USEFUL_CITES[(pick + 3) % len(USEFUL_CITES)]
-    title = a["titles"][v]
-    core = a["core"] if v == 0 else a["core"][1:] + a["core"][:1]
-    paras = [a["openings"][v]] + core + [a["endings"][v]]
+    title = a["titles"][vi]
+    core = a["core"] if v % 2 == 0 else a["core"][1:] + a["core"][:1]
+    paras = [a["openings"][vi % len(a["openings"])]] + core + [a["endings"][vi % len(a["endings"])]]
     paras = [p.format(c1=c1, c2=c2) for p in paras]
     # 新增核心点每篇必含，表述轮换（放结尾前）
     for j, variants in enumerate(NEW_POINTS):
@@ -736,14 +767,14 @@ def main() -> int:
         if PENDING.exists():
             for _x in json.loads(PENDING.read_text(encoding="utf-8")):
                 used_titles.add(_x["title"])
-        for _ in range(24):
+        for _ in range(24):  # A 标题含公司域名，行间天然互异，走位只防同行重发
             title = common.build_title(company, domain, limit, pick, r.get("short", ""), body)
-            btitle, _ = gen_useful_article(pick, limit)
-            if title not in used_titles and btitle not in used_titles:
+            if title not in used_titles:
                 break
             pick += 1
         else:
             print("   ⚠ 标题去重24次未果，沿用当前标题")
+        btitle, bbody = gen_useful_article(pick, limit, used_titles)  # 空位池取模，行间不收敛
         ok, issues = check_content(title, domain)
         if not ok:
             print(f"   ✗ 标题红线未过，跳过: {issues[:2]}")
@@ -783,7 +814,6 @@ def main() -> int:
 
         # 第二篇：观点文（同流程；链接记入“编码-有用”列）
         print("⑥ 生成观点文（企业注册.网址有没有用）…")
-        _, bbody = gen_useful_article(pick, limit)  # 标题已在上面定稿（btitle），只取正文
         bbody = clean_text(bbody, domain)
         bfirst = bbody.split("\n\n")[0] if bbody else ""
         if ".网址" not in bfirst and "中文网址" not in bfirst and "中文域名" not in bfirst:
