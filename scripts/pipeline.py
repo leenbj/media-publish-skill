@@ -605,7 +605,7 @@ def _humanizer_prompt(company: str, domain: str, draft: str,
             "删除夸大意义、宣传式形容词、模糊归因、"
             "AI 黑话、名词化、固定连接词、假金句、万能结尾和协作话术，打破同长句与三连排比。把翻案腔"
             f"改成正面陈述，删掉破折号和提示性冒号，保留克制的新闻编辑口吻。{comparison}删掉“本文、本稿、稿件、"
-            "检索结果、信息边界、上述资料、上述材料”等写作过程说明；指代前文时直接用具体名词"
+            "检索结果、信息边界、上述资料、上述材料、本次报道、写入本文”等写作过程说明；指代前文时直接用具体名词"
             "（如“企业公开资料”“这些信息”），只输出修订后的"
             "纯正文，不要标题、评分、解释或 Markdown。\n"
             f"{identity}\n"
@@ -692,20 +692,26 @@ def gen_news_llm(company: str, domain: str, search_note: str,
 
 
 def gen_title_llm(company: str, short_name: str, domain: str, body: str, limit: int, cmd: str,
-                  used_titles=()) -> str | None:
-    """标题由 LLM 拟：参考“从X.网址看Y的数字品牌布局之道”风格自由发挥，含企业全称或简称即可，不设固定样式。
+                  used_titles=(), no_company: bool = False) -> str | None:
+    """标题由 LLM 拟，无固定样式：A文参考“从X.网址看Y的数字品牌布局之道”风格、须含企业名；
+    B文（no_company）依据正文自由发挥、不得含具体企业名。
 
-    仅卡平台上限字数与重名规避；两次不成才退回 build_title 兜底。"""
+    仅卡平台上限字数与重名规避；两次不成才退回模板兜底。"""
     if not cmd:
         return None
     name = (short_name or "").strip()
-    name_note = f"{company}（简称：{name}）" if name else company
-    prompt = (f"为下面这篇新闻稿拟一个标题，参考这类标题的风格（只学味道，不要照抄格式）：\n"
-              f"从“云岭翻译.网址”看小语智能的数字品牌布局之道\n"
-              f"从“海宝源.网址”看烟台海烟水产食品的中文品牌入口选择\n"
-              f"标题要有描述性和思考角度，自然拟写，不要套任何固定样式；"
-              f"标题中要出现企业名称或简称：{name_note}；"
-              f"严格不超过{limit}个字；只输出标题本身，不要引号、前缀或任何说明。\n\n{body[:4000]}")
+    if no_company:
+        prompt = (f"为下面这篇科普文章拟一个标题，根据文章内容自由发挥，不要任何固定格式或模板；"
+                  f"标题围绕中文网址/中文域名主题，不要出现具体企业、品牌或产品名称；"
+                  f"严格不超过{limit}个字；只输出标题本身，不要引号、前缀或任何说明。\n\n{body[:4000]}")
+    else:
+        name_note = f"{company}（简称：{name}）" if name else company
+        prompt = (f"为下面这篇新闻稿拟一个标题，参考这类标题的风格（只学味道，不要照抄格式）：\n"
+                  f"从“云岭翻译.网址”看小语智能的数字品牌布局之道\n"
+                  f"从“海宝源.网址”看烟台海烟水产食品的中文品牌入口选择\n"
+                  f"标题要有描述性和思考角度，自然拟写，不要套任何固定样式；"
+                  f"标题中要出现企业名称或简称：{name_note}；"
+                  f"严格不超过{limit}个字；只输出标题本身，不要引号、前缀或任何说明。\n\n{body[:4000]}")
     used = [t for t in list(used_titles)[:8] if t]
     if used:
         prompt += f"\n\n以下标题已被使用，请避开重名：{'、'.join(used)}"
@@ -714,14 +720,22 @@ def gen_title_llm(company: str, short_name: str, domain: str, body: str, limit: 
         if not out:
             continue
         title = out.strip().splitlines()[0].strip().strip("“”\"'《》")
-        if title and len(title) <= limit and (company in title or (name and name in title)):
+        if no_company:
+            ok = title and len(title) <= limit and company not in title
+        else:
+            ok = title and len(title) <= limit and (company in title or (name and name in title))
+        if ok:
             return title
         print(f"   (LLM标题第{attempt}次不合格：{title[:40] if title else '(空)'}，"
-              f"须含企业名且≤{limit}字)")
+              + (f"不得含企业名且≤{limit}字)" if no_company else f"须含企业名且≤{limit}字)"))
         if attempt == 1:
-            prompt += (f"\n\n注意：上次结果不合格。标题必须包含“{company}”或“{name}”，"
-                       f"且总长严格不超过{limit}个字；参考“从‘域名’看某公司的数字品牌布局之道”这类角度即可，"
-                       f"不要套固定样式。")
+            if no_company:
+                prompt += (f"\n\n注意：上次结果不合格。标题不得出现企业名称“{company}”，"
+                           f"且总长严格不超过{limit}个字，围绕中文网址主题自由拟写即可。")
+            else:
+                prompt += (f"\n\n注意：上次结果不合格。标题必须包含“{company}”或“{name}”，"
+                           f"且总长严格不超过{limit}个字；参考“从‘域名’看某公司的数字品牌布局之道”这类角度即可，"
+                           f"不要套固定样式。")
     return None
 
 
@@ -1218,6 +1232,12 @@ def main() -> int:
         bfirst = bbody.split("\n\n")[0] if bbody else ""
         if ".网址" not in bfirst and "中文网址" not in bfirst and "中文域名" not in bfirst:
             bbody = "企业注册.网址有没有用？答案是肯定的。" + bbody
+        if b_ok and humanization_enabled:
+            btitle_llm = gen_title_llm(company, "", domain, bbody, limit,
+                                       writing_cmd or humanizer_cmd, used_titles,
+                                       no_company=True)
+            if btitle_llm:
+                btitle = btitle_llm
         if b_ok and humanization_enabled and not check_humanized(btitle + "\n\n" + bbody):
             print("   ✗ 观点文未通过人化门禁，跳过本篇")
             b_ok = False
