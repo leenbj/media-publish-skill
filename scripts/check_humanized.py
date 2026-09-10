@@ -92,12 +92,15 @@ def main() -> int:
     failures: list[str] = []
     warnings: list[str] = []
     line = lambda pos: raw.count("\n", 0, pos) + 1
+    first_line_len = len(raw.split("\n", 1)[0])  # 标题行长度：标题内的冒号是“域名：短语”结构分隔符，豁免
 
     for symbol, label in (("—", "破折号"), ("–", "连接号式破折号")):
         for m in re.finditer(re.escape(symbol), text):
             failures.append(f"{label}：第 {line(m.start())} 行")
     for symbol, label in (("：", "中文冒号"), (":", "英文冒号")):
         for m in re.finditer(re.escape(symbol), text):
+            if m.start() < first_line_len:
+                continue  # 标题行的冒号视为结构分隔，不判提示性
             tail = text[m.end():m.end() + 2].lstrip()
             if tail[:1] not in ("「", "『", "“", "‘", '"'):
                 failures.append(f"提示性{label}：第 {line(m.start())} 行")
