@@ -700,8 +700,11 @@ def gen_title_llm(company: str, short_name: str, domain: str, body: str, limit: 
         return None
     name = (short_name or "").strip()
     name_note = f"{company}（简称：{name}）" if name else company
-    prompt = (f"为下面这篇新闻稿拟一个标题，围绕“{company}官网启用{domain}”这件事自由拟写，"
-              f"怎么自然怎么写，不设任何固定格式；标题中要出现企业名称或简称：{name_note}；"
+    prompt = (f"为下面这篇新闻稿拟一个标题，采用“域名：描述性短语”的形式："
+              f"冒号前用完整域名“{domain}”，冒号后用一句描述性的话，点出这家企业在数字品牌、官网入口方面的意义或定位，"
+              f"描述要具体、贴合正文事实，不要空泛套话。参考例子（只学形式，不照抄内容）："
+              f"中航成飞.网址：成飞航空科技的数字品牌战略支点。"
+              f"标题中要出现企业名称或简称：{name_note}；"
               f"严格不超过{limit}个字；只输出标题本身，不要引号、前缀或任何说明。\n\n{body[:4000]}")
     used = [t for t in list(used_titles)[:8] if t]
     if used:
@@ -711,13 +714,16 @@ def gen_title_llm(company: str, short_name: str, domain: str, body: str, limit: 
         if not out:
             continue
         title = out.strip().splitlines()[0].strip().strip("“”\"'《》")
-        if title and len(title) <= limit and (company in title or (name and name in title)):
+        if (title and len(title) <= limit
+                and domain in title and "：" in title
+                and (company in title or (name and name in title))):
             return title
         print(f"   (LLM标题第{attempt}次不合格：{title[:40] if title else '(空)'}，"
-              f"须含企业名且≤{limit}字)")
+              f"须为“{domain}：描述性短语”形式且含企业名、≤{limit}字)")
         if attempt == 1:
-            prompt += (f"\n\n注意：上次结果不合格。标题必须包含“{company}”或“{name}”，"
-                       f"且总长严格不超过{limit}个字，围绕官网启用域名自由拟写即可。")
+            prompt += (f"\n\n注意：上次结果不合格。标题必须是“{domain}：描述性短语”形式："
+                       f"冒号前为完整域名“{domain}”，冒号后为描述企业数字品牌/官网入口意义的短语，"
+                       f"且必须包含“{company}”或“{name}”，总长严格不超过{limit}个字。")
     return None
 
 
