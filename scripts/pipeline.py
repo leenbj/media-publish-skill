@@ -406,6 +406,7 @@ def gen_useful_article(pick: int, limit: int, used_titles=()) -> tuple[str, str]
 # B 文比较语境白名单：以下原话只作对比论证，放行；其余一律按红线拦。
 # 注意：仅观点文（strict=False）走白名单，启用文不受影响。
 COMPARATIVE_ALLOW = [
+    r"(与|和|跟)英文域名.{0,8}(没有任何区别|没有区别|没有实际区别|没有本质区别|无本质差异|无本质区别|一样|无差别)",
     r"与英文域名\.com、\.cn(没有任何区别|没有区别|一样|无差别)",
     r"远超英文域名",
     r"超过英文域名",
@@ -658,8 +659,10 @@ def check_humanized(text: str) -> bool:
 
 
 def gen_news_llm(company: str, domain: str, search_note: str,
-                 writing_cmd: str, humanizer_cmd: str) -> tuple[str, str] | None:
-    """用两阶段外部 LLM 生成新闻稿：先 human-writing，再 humanizer-zh。"""
+                 writing_cmd: str, humanizer_cmd: str) -> str | None:
+    """用两阶段外部 LLM 生成新闻稿正文：先 human-writing，再 humanizer-zh。
+
+    标题由 gen_title_llm 单独拟，本函数只负责正文。"""
     if not writing_cmd and not humanizer_cmd:
         return None
     material = (f"已知启用事实：{company}官网启用“{domain}”。\n"
@@ -685,7 +688,38 @@ def gen_news_llm(company: str, domain: str, search_note: str,
     if not ok:
         print(f"   (两阶段稿件红线未过：{issues[:2]})")
         return None
-    return common.build_title(company, domain, common.DEFAULT_TITLE_LIMIT, content=body), body
+    return body
+
+
+def gen_title_llm(company: str, short_name: str, body: str, limit: int, cmd: str,
+                  used_titles=()) -> str | None:
+    """标题由 LLM 按正文自由拟：唯一硬要求是含企业全称或简称，不套任何格式模板。
+
+    仅额外卡平台上限字数与重名规避；两次不成才退回 build_title 兜底。"""
+    if not cmd:
+        return None
+    name = (short_name or "").strip()
+    name_note = f"{company}（简称：{name}）" if name else company
+    prompt = (f"为下面这篇新闻稿拟一个正常的新闻文章标题。"
+              f"标题根据文章内容自由拟写，不要套用任何固定格式或标签拼接；"
+              f"标题中要出现企业名称或简称：{name_note}；"
+              f"严格不超过{limit}个字；只输出标题本身，不要引号、前缀或任何说明。\n\n{body[:4000]}")
+    used = [t for t in list(used_titles)[:8] if t]
+    if used:
+        prompt += f"\n\n以下标题已被使用，请避开重名：{'、'.join(used)}"
+    for attempt in (1, 2):
+        out = _run_llm_stage(cmd, prompt, "标题拟写")
+        if not out:
+            continue
+        title = out.strip().splitlines()[0].strip().strip("“”\"'《》")
+        if title and len(title) <= limit and (company in title or (name and name in title)):
+            return title
+        print(f"   (LLM标题第{attempt}次不合格：{title[:40] if title else '(空)'}，"
+              f"须含企业名且≤{limit}字)")
+        if attempt == 1:
+            prompt += (f"\n\n注意：上次结果不合格。标题必须包含“{company}”或“{name}”，"
+                       f"且总长严格不超过{limit}个字。")
+    return None
 
 
 def gen_news_article(company: str, domain: str, search_note: str,
@@ -1074,7 +1108,7 @@ def main() -> int:
         print("② 生成新闻稿…")
         llm_hit = gen_news_llm(company, domain, note, writing_cmd, humanizer_cmd)
         if llm_hit:
-            _, body = llm_hit
+            body = llm_hit
             print("   (human-writing → humanizer-zh)")
         elif humanization_enabled:
             print("   ✗ 两阶段人化失败，跳过该行（不会回退到未清腔模板）")
@@ -1092,7 +1126,7 @@ def main() -> int:
         if not any(marker in first for marker in required_markers):
             body = lead + body
         body = clean_text(body, domain)
-        # 标题：完整企业名称或简称优先，动作/角度从正文事实动态选择；不强制塞域名
+        # 标题：LLM 按正文自由拟（含企业名/简称，≤平台上限）；无 LLM 或不合格才用 build_title 兜底
         limits = [common.TITLE_LIMIT.get(MEDIA_OF[c], common.DEFAULT_TITLE_LIMIT)
                   for c in r["codes"] if c in MEDIA_OF]
         limit = min(limits) if limits else common.DEFAULT_TITLE_LIMIT
@@ -1106,13 +1140,20 @@ def main() -> int:
         if PENDING.exists():
             for _x in json.loads(PENDING.read_text(encoding="utf-8")):
                 used_titles.add(_x["title"])
-        for _ in range(24):  # A 标题含公司域名，行间天然互异，走位只防同行重发
-            title = common.build_title(company, domain, limit, pick, r.get("short", ""), body)
-            if title not in used_titles:
-                break
-            pick += 1
-        else:
-            print("   ⚠ 标题去重24次未果，沿用当前标题")
+        title = None
+        if humanization_enabled:
+            title = gen_title_llm(company, r.get("short", ""), body, limit,
+                                  writing_cmd or humanizer_cmd, used_titles)
+            if title and title in used_titles:
+                title = None  # 仍重名：退兜底去重
+        if title is None:
+            for _ in range(24):  # A 标题含公司域名，行间天然互异，走位只防同行重发
+                title = common.build_title(company, domain, limit, pick, r.get("short", ""), body)
+                if title not in used_titles:
+                    break
+                pick += 1
+            else:
+                print("   ⚠ 标题去重24次未果，沿用当前标题")
         btitle, bbody = gen_useful_article(pick, limit, used_titles)  # 空位池取模，行间不收敛
         ok, issues = check_content(title, domain)
         if not ok:
