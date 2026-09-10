@@ -217,19 +217,13 @@ def build_title(company: str, domain: str, limit: int = DEFAULT_TITLE_LIMIT,
     for base in bases:
         if len(base) > limit:
             continue
-        if event_label:
-            candidate = f"{base}{event_label}"
-            if len(candidate) <= limit:
-                return candidate
-            for topic in topics:
-                candidate = f"{base}，{topic}"
-                if len(candidate) <= limit:
-                    return candidate
-            # 当前名称放不下动作句时，继续尝试 xlsx 简称或品牌缩写，避免标题
-            # 退化成只有企业名称的字段。
-            continue
+        # 正文角度优先：标题必须反映文章内容，事件句只是无角度命中时的兖底
         for topic in topics:
             candidate = f"{base}，{topic}"
+            if len(candidate) <= limit:
+                return candidate
+        if event_label:
+            candidate = f"{base}{event_label}"
             if len(candidate) <= limit:
                 return candidate
         return base
