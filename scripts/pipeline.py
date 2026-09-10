@@ -691,27 +691,17 @@ def gen_news_llm(company: str, domain: str, search_note: str,
     return body
 
 
-# 标题广告腔硬校验：命中即不合格（新闻标题禁夸赞/营销/号召/导流）
-AD_STYLE_PAT = re.compile(
-    r"重磅|震撼|领先|首选|顶级|极致|赋能|助力|喜讯|隆重|盛大|强势|"
-    r"一站式|完美|放心选择|不容错过|敬请期待|全新|官网入口|官网地址|！")
-
-
-def gen_title_llm(company: str, short_name: str, body: str, limit: int, cmd: str,
+def gen_title_llm(company: str, short_name: str, domain: str, body: str, limit: int, cmd: str,
                   used_titles=()) -> str | None:
-    """标题由 LLM 按正文自由拟：须含企业全称或简称，新闻报道风格，不套任何格式模板。
+    """标题由 LLM 围绕“公司官网启用域名”主题自由拟：含企业全称或简称即可，不设其他格式限定。
 
-    仅额外卡平台上限字数、重名规避与广告腔硬校验；两次不成才退回 build_title 兜底。"""
+    仅卡平台上限字数与重名规避；两次不成才退回 build_title 兜底。"""
     if not cmd:
         return None
     name = (short_name or "").strip()
     name_note = f"{company}（简称：{name}）" if name else company
-    prompt = (f"为下面这篇新闻稿拟一个新闻标题，像媒体记者报道企业动态：第三人称、克制陈述事实。"
-              f"角度从正文内容里自选，不限于域名启用这一件事，企业资料、行业数字化等正文写到的内容都可以做角度；"
-              f"口吻参考（只学风格，不要照抄）：烟台某水产公司启用中文域名 / 某品牌.网址投入使用，企业统一线上入口；"
-              f"禁止广告、宣传、导流口吻：不用“官网入口、官网地址、全新”等词，不用夸赞、营销、号召类措辞和感叹号；"
-              f"标题根据文章内容自由拟写，不要套用任何固定格式或标签拼接；"
-              f"标题中要出现企业名称或简称：{name_note}；"
+    prompt = (f"为下面这篇新闻稿拟一个标题，围绕“{company}官网启用{domain}”这件事自由拟写，"
+              f"怎么自然怎么写，不设任何固定格式；标题中要出现企业名称或简称：{name_note}；"
               f"严格不超过{limit}个字；只输出标题本身，不要引号、前缀或任何说明。\n\n{body[:4000]}")
     used = [t for t in list(used_titles)[:8] if t]
     if used:
@@ -721,18 +711,13 @@ def gen_title_llm(company: str, short_name: str, body: str, limit: int, cmd: str
         if not out:
             continue
         title = out.strip().splitlines()[0].strip().strip("“”\"'《》")
-        bad = AD_STYLE_PAT.search(title)
-        if bad:
-            print(f"   (LLM标题第{attempt}次含广告腔“{bad.group()}”：{title[:40]})")
-        elif title and len(title) <= limit and (company in title or (name and name in title)):
+        if title and len(title) <= limit and (company in title or (name and name in title)):
             return title
-        else:
-            print(f"   (LLM标题第{attempt}次不合格：{title[:40] if title else '(空)'}，"
-                  f"须含企业名且≤{limit}字)")
+        print(f"   (LLM标题第{attempt}次不合格：{title[:40] if title else '(空)'}，"
+              f"须含企业名且≤{limit}字)")
         if attempt == 1:
             prompt += (f"\n\n注意：上次结果不合格。标题必须包含“{company}”或“{name}”，"
-                       f"且总长严格不超过{limit}个字，并且必须保持客观新闻报道风格，"
-                       f"不得出现广告、夸赞、营销、号召类措辞，也不要“官网入口、官网地址”这类导流词。")
+                       f"且总长严格不超过{limit}个字，围绕官网启用域名自由拟写即可。")
     return None
 
 
@@ -1156,7 +1141,7 @@ def main() -> int:
                 used_titles.add(_x["title"])
         title = None
         if humanization_enabled:
-            title = gen_title_llm(company, r.get("short", ""), body, limit,
+            title = gen_title_llm(company, r.get("short", ""), domain, body, limit,
                                   writing_cmd or humanizer_cmd, used_titles)
             if title and title in used_titles:
                 title = None  # 仍重名：退兜底去重
