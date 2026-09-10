@@ -693,17 +693,17 @@ def gen_news_llm(company: str, domain: str, search_note: str,
 
 def gen_title_llm(company: str, short_name: str, domain: str, body: str, limit: int, cmd: str,
                   used_titles=()) -> str | None:
-    """标题由 LLM 围绕“公司官网启用域名”主题自由拟：含企业全称或简称即可，不设其他格式限定。
+    """标题由 LLM 拟：参考“从X.网址看Y的数字品牌布局之道”风格自由发挥，含企业全称或简称即可，不设固定样式。
 
     仅卡平台上限字数与重名规避；两次不成才退回 build_title 兜底。"""
     if not cmd:
         return None
     name = (short_name or "").strip()
     name_note = f"{company}（简称：{name}）" if name else company
-    prompt = (f"为下面这篇新闻稿拟一个标题，采用“域名：描述性短语”的形式："
-              f"冒号前用完整域名“{domain}”，冒号后用一句描述性的话，点出这家企业在数字品牌、官网入口方面的意义或定位，"
-              f"描述要具体、贴合正文事实，不要空泛套话。参考例子（只学形式，不照抄内容）："
-              f"中航成飞.网址：成飞航空科技的数字品牌战略支点。"
+    prompt = (f"为下面这篇新闻稿拟一个标题，参考这类标题的风格（只学味道，不要照抄格式）：\n"
+              f"从“云岭翻译.网址”看小语智能的数字品牌布局之道\n"
+              f"从“海宝源.网址”看烟台海烟水产食品的中文品牌入口选择\n"
+              f"标题要有描述性和思考角度，自然拟写，不要套任何固定样式；"
               f"标题中要出现企业名称或简称：{name_note}；"
               f"严格不超过{limit}个字；只输出标题本身，不要引号、前缀或任何说明。\n\n{body[:4000]}")
     used = [t for t in list(used_titles)[:8] if t]
@@ -714,16 +714,14 @@ def gen_title_llm(company: str, short_name: str, domain: str, body: str, limit: 
         if not out:
             continue
         title = out.strip().splitlines()[0].strip().strip("“”\"'《》")
-        if (title and len(title) <= limit
-                and domain in title and "：" in title
-                and (company in title or (name and name in title))):
+        if title and len(title) <= limit and (company in title or (name and name in title)):
             return title
         print(f"   (LLM标题第{attempt}次不合格：{title[:40] if title else '(空)'}，"
-              f"须为“{domain}：描述性短语”形式且含企业名、≤{limit}字)")
+              f"须含企业名且≤{limit}字)")
         if attempt == 1:
-            prompt += (f"\n\n注意：上次结果不合格。标题必须是“{domain}：描述性短语”形式："
-                       f"冒号前为完整域名“{domain}”，冒号后为描述企业数字品牌/官网入口意义的短语，"
-                       f"且必须包含“{company}”或“{name}”，总长严格不超过{limit}个字。")
+            prompt += (f"\n\n注意：上次结果不合格。标题必须包含“{company}”或“{name}”，"
+                       f"且总长严格不超过{limit}个字；参考“从‘域名’看某公司的数字品牌布局之道”这类角度即可，"
+                       f"不要套固定样式。")
     return None
 
 
