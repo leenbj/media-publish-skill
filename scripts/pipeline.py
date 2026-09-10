@@ -360,55 +360,28 @@ NEW_POINTS = [
 
 
 def b_free_combos(used_titles: set) -> list[tuple[int, int]]:
-    """B 文空位池：已用标题占的（角度,变体）剔除，返回空位；占满则返回全部。
-
-    已用标题可能带“企业名：”前缀（跨公司），按后缀匹配基题。"""
+    """B 文空位池：已用标题占的（角度,变体）剔除，返回空位；占满则返回全部。"""
     rev: dict[str, list[tuple[int, int]]] = {}
     for ai, a in enumerate(USEFUL_ANGLES):
         for vi, t in enumerate(a["titles"]):
             rev.setdefault(t, []).append((ai, vi))
     used = set()
     for t in used_titles:
-        for base, combos in rev.items():
-            if t == base or t.endswith(base):
-                used.update(combos)
+        used.update(rev.get(t, []))
     allc = [(ai, vi) for ai, a in enumerate(USEFUL_ANGLES) for vi in range(len(a["titles"]))]
     free = [c for c in allc if c not in used]
     return free or allc
 
 
-def gen_useful_article(pick: int, limit: int, used_titles=(),
-                       company: str = "", short_name: str = "") -> tuple[str, str]:
-    """科普观点文：空位池取模选（角度,变体），行间不收敛、不重名；标题卡字数。
-
-    标题 = 企业名或简称 + 观点角度（按所选角度即文章内容命题），超上限时
-    依次换下一个空位角度，全部放不下才退回无前缀基题。"""
+def gen_useful_article(pick: int, limit: int, used_titles=()) -> tuple[str, str]:
+    """科普观点文：空位池取模选（角度,变体），行间不收敛、不重名；标题卡字数。"""
     free = b_free_combos(set(used_titles))
-    # 名称候选：xlsx 简称 > 全称 > 去尾缀 > 官方缩写；取第一个能让某角度带前缀放下的
-    names = [n.strip() for n in (short_name, company,
-             common.short_company(company or ""), common.abbr_company(company or "")) if n and n.strip()]
-    names = list(dict.fromkeys(names))
-    ai = vi = 0
-    title = ""
-    for name in names:
-        prefix = f"{name}："
-        for k in range(len(free)):
-            ai, vi = free[(pick + k) % len(free)]
-            cand = f"{prefix}{USEFUL_ANGLES[ai]['titles'][vi]}"
-            if len(cand) <= limit:
-                title = cand
-                break
-        if title:
-            break
-    if not title:
-        # 全部名称、角度组合都放不下：截断保底（极少触发）
-        ai, vi = free[pick % len(free)]
-        title = f"{names[0]}：{USEFUL_ANGLES[ai]['titles'][vi]}"[:limit] if names \
-            else USEFUL_ANGLES[ai]['titles'][vi]
+    ai, vi = free[pick % len(free)]
     a = USEFUL_ANGLES[ai]
     v = vi
     c1 = USEFUL_CITES[pick % len(USEFUL_CITES)]
     c2 = USEFUL_CITES[(pick + 3) % len(USEFUL_CITES)]
+    title = a["titles"][vi]
     core = a["core"] if v % 2 == 0 else a["core"][1:] + a["core"][:1]
     paras = [a["openings"][vi % len(a["openings"])]] + core + [a["endings"][vi % len(a["endings"])]]
     paras = [p.format(c1=c1, c2=c2) for p in paras]
@@ -426,9 +399,7 @@ def gen_useful_article(pick: int, limit: int, used_titles=(),
         paras.insert(-1, text)
         body_len += len(text)
     assert len(title) <= limit, f"观点文标题超限：{title}"
-    if "中文.网址" not in title:
-        # 截断保底可能丢掉“中文.网址”，告警不阻断
-        print(f"   ⚠ 观点文标题缺少“中文.网址”：{title}")
+    assert "中文" in title and ".网址" in title, f"观点文标题须含中文.网址：{title}"
     return title, "\n\n".join(paras)
 
 
@@ -1142,9 +1113,7 @@ def main() -> int:
             pick += 1
         else:
             print("   ⚠ 标题去重24次未果，沿用当前标题")
-        btitle, bbody = gen_useful_article(
-            pick, limit, used_titles, company=company,
-            short_name=r.get("short", ""))  # 空位池取模，行间不收敛
+        btitle, bbody = gen_useful_article(pick, limit, used_titles)  # 空位池取模，行间不收敛
         ok, issues = check_content(title, domain)
         if not ok:
             print(f"   ✗ 标题红线未过，跳过: {issues[:2]}")
