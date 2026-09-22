@@ -63,11 +63,20 @@ def state_for(media: str, account: str) -> Path:
 
 
 def state_for_code(code: str) -> tuple[str, str, Path]:
-    """按编码返回 (media, account, state)。未知编码抛 KeyError（附已知列表）。"""
+    """按编码返回 (media, account, state)。未知编码抛 KeyError（附已知列表）。
+
+    登录态文件缺失时抛 FileNotFoundError 并提示补录命令，调用方（pipeline/
+    publish_*.py）直接把这段话展示给用户，不抛无头 traceback。"""
     e = codes().get(code)
     if not e:
         raise KeyError(f"未知媒体编码 {code!r}，已知：{sorted(codes())}")
-    return e["media"], e["account"], Path(e["state"])
+    media, account, path = e["media"], e["account"], Path(e["state"])
+    if not path.exists():
+        raise FileNotFoundError(
+            f"[{code}] 无登录态文件：{path}。请先补录登录："
+            f"python3 scripts/login.py {media} --account {account} "
+            f"（或跑 python3 scripts/setup_accounts.py 逐个检查）")
+    return media, account, path
 
 
 def media_param(media: str, key: str, default: str = "") -> str:

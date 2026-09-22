@@ -1006,6 +1006,26 @@ def main() -> int:
     if a.row:
         rows = [r for r in rows if int(r["num"]) == a.row]
     print(f"待处理 {len(rows)} 行")
+    if not a.no_publish:
+        # 发布前预检登录态：缺哪个编码就提示补录，不进生成流程
+        needed: list[str] = []
+        for r in rows:
+            for c in r["codes"]:
+                if c not in needed:
+                    needed.append(c)
+        missing = []
+        for c in needed:
+            try:
+                common.state_for_code(c)
+            except (KeyError, FileNotFoundError) as exc:
+                missing.append(str(exc))
+        if missing:
+            print("✗ 发布前检查：登录态缺失，本次不生成、不发布。")
+            for m in missing:
+                print(f"  - {m}")
+            print("  补录后重跑本命令即可。")
+            return 1
+        print(f"登录态预检通过：{'+'.join(needed) if needed else '(无发布编码)'}")
     ok_rows = 0
 
     for i, r in enumerate(rows):
