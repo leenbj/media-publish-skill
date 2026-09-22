@@ -12,6 +12,7 @@ accounts.yaml 是唯一真实来源；环境变量可覆盖：
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 from pathlib import Path
@@ -108,71 +109,8 @@ COMPANY_TAILS = ("有限责任公司", "股份有限公司", "有限公司",
 # 三级缩写都装不下时的截断锚点：切到“地域+品牌+集团/公司”为止
 ABBR_BOUNDARIES = ("集团", "控股", "实业", "公司", "中心")
 
-# 标题角度规则：只在正文实际出现相应事实时提供可读的新闻标题短语。
-# 候选会按正文命中次数排序，并由行号轮换；它们不是固定标题模板。
-TITLE_TOPIC_RULES = (
-    (("启用", "上线", "入口", "地址换成", "官网地址"),
-     ("官网入口更新", "新入口上线")),
-    (("浏览器", "输入", "访问", "直达"),
-     ("可直接输入访问", "访问方式更直观")),
-    (("海产品", "水产品", "海参", "调味品", "食品"),
-     ("主营海产品", "主营海产品与调味品")),
-    (("主营业务", "主营", "研发", "生产", "供应", "加工", "制造"),
-     ("主营业务梳理", "业务资料更新")),
-    (("数字化", "转型", "线上", "互联网", "信息化"),
-     ("线上服务完善", "数字化进展")),
-    (("品牌资产", "防伪", "保护", "仿冒", "钓鱼"),
-     ("线上品牌保护", "品牌保护再添入口")),
-    (("客户", "用户", "体验"),
-     ("用户访问更清晰", "访问体验说明")),
-)
-
-
-def title_topics_from_content(content: str, domain: str = "", pick: int = 0,
-                              company: str = "") -> list[str]:
-    """从正文事实提取标题角度，不命中正文就不生成该角度。
-
-    域名只有在正文同时提到访问/入口/启用等事实时才进入候选，避免把域名
-    无条件塞进每个标题。返回值按命中强度排序并按行号轮换，便于同批标题
-    有变化而不改变标题的事实边界。
-    """
-    text = content or ""
-    domain_present = bool(domain and domain in text)
-    # 企业名/域名本身可能含“品牌、服务、入口”等字样，不能仅凭身份字段
-    # 触发标题角度；角度应来自正文对事实或动作的描述。
-    if company:
-        for name in dict.fromkeys((company, short_company(company), abbr_company(company))):
-            if name:
-                text = text.replace(name, "")
-    if domain:
-        text = text.replace(domain, "")
-    ranked: list[tuple[int, int, tuple[str, ...]]] = []
-    for index, (keywords, labels) in enumerate(TITLE_TOPIC_RULES):
-        hits = sum(text.count(keyword) for keyword in keywords)
-        if hits:
-            ranked.append((hits, index, labels))
-    ranked.sort(key=lambda item: (-item[0], item[1]))
-
-    # 业务、产品、数字化、品牌等实质角度优先于“入口/访问”这类通用事实；
-    # 只有正文没有实质角度时，才用入口或访问方式作标题补充。
-    specific = [item for item in ranked if item[1] >= 2]
-    general = [item for item in ranked if item[1] < 2]
-    topics: list[str] = []
-    access_terms = ("启用", "上线", "入口", "地址", "访问", "输入", "直达")
-    if specific:
-        ranked_for_title = specific + general
-    else:
-        if domain_present and any(term in text for term in access_terms):
-            topics.append(f"{domain}入口")
-        ranked_for_title = general
-    for _, _, labels in ranked_for_title:
-        topics.extend(labels)
-
-    unique = list(dict.fromkeys(topic for topic in topics if topic))
-    if unique:
-        offset = pick % len(unique)
-        unique = unique[offset:] + unique[:offset]
-    return unique
+# 企业名里的通用字样：不能单独当作“标题已出现企业名称”的依据
+GENERIC_NAME_FRAGMENTS = ("有限", "公司", "集团", "股份", "责任", "控股", "实业", "中心")
 
 
 def short_company(name: str) -> str:
@@ -193,47 +131,58 @@ def abbr_company(name: str) -> str:
     return s
 
 
-def build_title(company: str, domain: str, limit: int = DEFAULT_TITLE_LIMIT,
-                pick: int = 0, short_name: str = "", content: str = "") -> str:
-    """组装可阅读的企业新闻标题，保证 len <= limit。
+def title_name_variants(company: str, *aliases: str) -> list[str]:
+    """标题可用名称：全称、调用方给的简称、去尾缀简称、激进缩写（去重保序）。"""
+    candidates = [company, *aliases, short_company(company), abbr_company(company)]
+    return [c.strip() for c in dict.fromkeys(candidates) if c and c.strip()]
 
-    标题只要求出现企业全称或简称，并补充正文支持的动作或事实角度；域名的
-    完整写法留在正文首段，不再强制塞进标题。这样既能保留企业识别，又能让
-    标题读起来像正常新闻标题，而不是字段拼接。
-    """
-    company = company.strip()
-    short_name = short_name.strip()
-    bases = list(dict.fromkeys(
-        [b for b in (company, short_name, short_company(company), abbr_company(company)) if b]))
-    topics = title_topics_from_content(content, domain, pick, company)
-    access_terms = ("启用", "上线", "入口", "地址", "访问", "输入", "直达")
-    # 事件句只保留新闻动作，不携带完整域名；完整域名在正文首段核实。
-    event_labels = ("官网入口更新", "官网地址更新", "官网上线")
-    event_label = (event_labels[0]
-                   if domain and domain in (content or "")
-                   and any(term in (content or "") for term in access_terms)
-                   else "")
 
-    for base in bases:
-        if len(base) > limit:
-            continue
-        # 正文角度优先：标题必须反映文章内容，事件句只是无角度命中时的兖底
-        for topic in topics:
-            candidate = f"{base}，{topic}"
-            if len(candidate) <= limit:
-                return candidate
-        if event_label:
-            candidate = f"{base}{event_label}"
-            if len(candidate) <= limit:
-                return candidate
-        return base
+def title_name_hit(title: str, names: list[str], width: int = 3) -> str:
+    """返回标题中用到的企业名称写法，空串表示没认出来。
 
-    # 极端长企业名：保留最短可用名称；这是平台硬上限下的最后兜底。
-    fallback = next((base for base in reversed(bases) if base), "企业")
-    action = "，入口更新"
-    if limit > len(action) + 3:
-        return f"{fallback[:limit - len(action)]}{action}"
-    return fallback[:max(0, limit)]
+    先认完整变体（全称/简称/缩写），再认企业名里 ≥width 字的连续片段，这样
+    “烟台海烟水产食品有限公司”写成“海烟水产……”这类自然简称也算出现企业名；
+    “有限/公司”这类通用字样不算。"""
+    for name in sorted(names, key=len, reverse=True):
+        if name and name in title:
+            return name
+    for name in names:
+        for i in range(max(0, len(name) - width + 1)):
+            fragment = name[i:i + width]
+            if any(generic in fragment for generic in GENERIC_NAME_FRAGMENTS):
+                continue
+            if fragment in title:
+                return fragment
+    return ""
+
+
+def title_missing_core(title: str, names: list[str], limit: int = 0) -> str:
+    """返回标题缺失的硬要素，空串表示合规。
+
+    企业新闻标题的硬要求只有一条：标题里出现企业名称（全称/简称/缩写，或企业名里
+    的自然简称片段）。其余句式、用词和角度不限；只多一条防呆——标题不能只是企业
+    名称本身，否则读起来不是标题。"""
+    if not title:
+        return "标题为空"
+    if limit and len(title) > limit:
+        return f"超过{limit}字（当前{len(title)}字）"
+    if not names:
+        return ""
+    hit = title_name_hit(title, names)
+    if not hit:
+        return "缺少企业名称"
+    if not title.replace(hit, "", 1).strip("，,：:。 、-—"):
+        return "只有企业名称，缺少新闻角度"
+    return ""
+
+
+# 标题完全自由后可能带路径字符，直接当文件名会抛 OSError
+ILLEGAL_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def safe_filename(name: str, max_len: int = 80) -> str:
+    """把标题转成可用文件名：替换路径非法字符并截断。"""
+    return ILLEGAL_FILENAME_CHARS.sub("_", (name or "").strip())[:max_len].strip() or "未命名"
 
 
 def title_warning(title: str, media: str) -> str:
