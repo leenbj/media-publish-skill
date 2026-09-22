@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """一站式发布流水线 v2.1（skill 核心）。
 
-输入：xlsx（列：编号 | 域名 | 企业名称 | 媒体 | 媒体 | 媒体…，每行可发多个媒体）
-流程：读表 → anysearch 查企业资料 → human-writing 写实 → humanizer-zh 清腔 →
+输入：xlsx（列：编号 | 域名 | 企业名称 | 简称（可选）| 企业信息资料（必填，写作首要依据）| 媒体/编码…，每行可发多个媒体）
+流程：读表 → 按企业信息资料派生查询 + 公司名兜底做 anysearch 检索 → 汇总（表格为准、检索补充、冲突弃检索侧）→ human-writing 写实 → humanizer-zh 清腔 →
      生成新闻稿（标题含企业名称或简称，句式角度自由）→ 红线检查 →
      生成人民网风格 GEO 网页（1 新闻页 + 3 QA 页）→
      全部存入 output/<域名原样>/ → 逐媒体发布 → 回查正式链接 → 回写 xlsx（每个媒体一列）。
@@ -337,19 +337,30 @@ def review_article(title: str, body: str, domain: str, strict: bool = True,
     return errors, warnings
 
 
-def search_company(company: str) -> str:
+def search_company(company: str, profile: str = "") -> str:
+    """联网检索企业资料：先用表格资料派生查询，再用公司名兜底。
+
+    表格“企业信息资料”是首要依据：取其中前 40 字实质内容拼一轮
+    定向查询（如产品、行业、地区词），命中该企业自身的公开页面；
+    再用公司名查介绍与主营业务作补充。调用方汇总时仍以表格为准，
+    冲突时丢弃检索侧的矛盾说法。"""
     out = []
     try:
         anysearch = common.resolve_anysearch()
     except FileNotFoundError as e:
         return f"(检索命令不可用: {e})"
-    for q in [f"{company} 介绍", f"{company} 主营业务"]:
+    queries = []
+    cleaned = re.sub(r"\s+", "", (profile or "").strip())[:40]
+    if cleaned:
+        queries.append(f"{company} {cleaned}")
+    queries += [f"{company} 介绍", f"{company} 主营业务"]
+    for q in queries[:3]:
         try:
             r = subprocess.run(anysearch + ["search", q, "--max_results", "4"],
                                capture_output=True, text=True, timeout=60)
-            out.append(r.stdout)
+            out.append(f"【查询:{q}】\n" + r.stdout)
         except Exception as e:
-            out.append(f"(搜索失败: {e})")
+            out.append(f"(搜索失败:{q}: {e})")
     return "\n\n".join(out)
 
 
@@ -1006,8 +1017,8 @@ def main() -> int:
         print(f"\n═══ [{r['num']}] {domain} / {company} → {'+'.join(r['codes'])} ═══")
 
         # ① 检索
-        print("① anysearch 检索企业资料…")
-        note = clean_text(search_company(company))  # 洗搜索结果的 HTML/实体
+        print("① anysearch 检索企业资料（表格资料派生查询 + 公司名补充）…")
+        note = clean_text(search_company(company, r.get("profile", "")))  # 洗搜索结果的 HTML/实体
 
         # ② 新闻稿（正文与标题都由 LLM 写，代码里没有预设文案）
         print("② 生成新闻稿…")
